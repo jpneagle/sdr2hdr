@@ -41,6 +41,33 @@ It is not designed around:
 
 ## Installation
 
+### Prerequisites
+
+Required:
+
+- `Python 3.11+`
+- `ffmpeg`
+- `ffprobe`
+
+Recommended:
+
+- `torch`
+  - for `MPS` on Apple Silicon
+  - for `CUDA` on Windows + NVIDIA
+
+Hardware-accelerated encoding also depends on your FFmpeg build:
+
+- `hevc_videotoolbox` requires a macOS FFmpeg build with VideoToolbox support
+- `hevc_nvenc` requires a Windows FFmpeg build with NVENC support
+
+Quick checks:
+
+```bash
+python3 --version
+ffmpeg -version
+ffprobe -version
+```
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -282,6 +309,18 @@ sdr2hdr-frames output_hdr.mp4 review/hdr_frames --hdr-preview --count 4
 
 ### 使い方
 
+前提条件:
+
+- `Python 3.11 以上`
+- `ffmpeg`
+- `ffprobe`
+- GPU 加速を使うなら `torch`
+
+補足:
+
+- macOS で `hevc_videotoolbox` を使うには VideoToolbox 対応の FFmpeg が必要です
+- Windows で `hevc_nvenc` を使うには NVENC 対応の FFmpeg が必要です
+
 インストール:
 
 ```bash
@@ -348,6 +387,18 @@ sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_videotoolbox
 - 输出完成后自动检查 HDR 元数据，必要时自动修复
 
 ### 用法
+
+前提条件:
+
+- `Python 3.11+`
+- `ffmpeg`
+- `ffprobe`
+- 如果要用 GPU 加速，建议安装 `torch`
+
+补充:
+
+- macOS 使用 `hevc_videotoolbox` 需要 FFmpeg 带有 VideoToolbox 支持
+- Windows 使用 `hevc_nvenc` 需要 FFmpeg 带有 NVENC 支持
 
 安装:
 
