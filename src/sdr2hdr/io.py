@@ -21,6 +21,27 @@ class VideoInfo:
     field_order: str | None
 
 
+def ffprobe_first_audio_codec(path: str) -> str | None:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=codec_name",
+        "-of",
+        "json",
+        path,
+    ]
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    payload = json.loads(result.stdout)
+    streams = payload.get("streams", [])
+    if not streams:
+        return None
+    return streams[0].get("codec_name")
+
+
 def ffprobe_video(path: str) -> VideoInfo:
     cmd = [
         "ffprobe",
@@ -83,6 +104,18 @@ def open_decoder(path: str, info: VideoInfo) -> subprocess.Popen[bytes]:
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
+def build_audio_output_args(output_path: str, source_path: str) -> list[str]:
+    output_suffix = Path(output_path).suffix.lower()
+    audio_codec = ffprobe_first_audio_codec(source_path)
+    if audio_codec is None:
+        return []
+    if output_suffix == ".mp4":
+        copy_safe_codecs = {"aac", "mp3", "ac3", "eac3", "alac"}
+        if audio_codec not in copy_safe_codecs:
+            return ["-c:a", "aac", "-b:a", "192k"]
+    return ["-c:a", "copy"]
+
+
 def open_encoder(
     output_path: str,
     source_path: str,
@@ -117,6 +150,7 @@ def open_encoder(
         "-map",
         "1:a?",
     ]
+    audio_args = build_audio_output_args(output_path, source_path)
     if encoder == "hevc_videotoolbox":
         cmd += [
             "-pix_fmt",
@@ -141,10 +175,8 @@ def open_encoder(
             "smpte2084",
             "-colorspace",
             "bt2020nc",
-            "-c:a",
-            "copy",
-            output_path,
         ]
+        cmd += audio_args + [output_path]
     elif encoder == "hevc_nvenc":
         cmd += [
             "-pix_fmt",
@@ -175,10 +207,8 @@ def open_encoder(
             "smpte2084",
             "-colorspace",
             "bt2020nc",
-            "-c:a",
-            "copy",
-            output_path,
         ]
+        cmd += audio_args + [output_path]
     else:
         cmd += [
             "-c:v",
@@ -201,10 +231,8 @@ def open_encoder(
             "smpte2084",
             "-colorspace",
             "bt2020nc",
-            "-c:a",
-            "copy",
-            output_path,
         ]
+        cmd += audio_args + [output_path]
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
 

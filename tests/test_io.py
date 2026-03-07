@@ -1,7 +1,7 @@
 import unittest
 from unittest import mock
 
-from sdr2hdr.io import VideoInfo, is_interlaced_video, open_decoder
+from sdr2hdr.io import VideoInfo, build_audio_output_args, is_interlaced_video, open_decoder
 
 
 class IoTests(unittest.TestCase):
@@ -27,6 +27,18 @@ class IoTests(unittest.TestCase):
         open_decoder("input.mp4", info)
         cmd = popen_mock.call_args.args[0]
         self.assertNotIn("-vf", cmd)
+
+    @mock.patch("sdr2hdr.io.ffprobe_first_audio_codec", return_value="pcm_bluray")
+    def test_build_audio_output_args_transcodes_pcm_bluray_for_mp4(self, _: mock.Mock) -> None:
+        self.assertEqual(build_audio_output_args("output.mp4", "input.m2ts"), ["-c:a", "aac", "-b:a", "192k"])
+
+    @mock.patch("sdr2hdr.io.ffprobe_first_audio_codec", return_value="aac")
+    def test_build_audio_output_args_copies_supported_mp4_audio(self, _: mock.Mock) -> None:
+        self.assertEqual(build_audio_output_args("output.mp4", "input.mp4"), ["-c:a", "copy"])
+
+    @mock.patch("sdr2hdr.io.ffprobe_first_audio_codec", return_value=None)
+    def test_build_audio_output_args_handles_missing_audio(self, _: mock.Mock) -> None:
+        self.assertEqual(build_audio_output_args("output.mp4", "input.mp4"), [])
 
 
 if __name__ == "__main__":
