@@ -74,11 +74,20 @@ class QueueJob:
     status: str = "pending"
 
 
+STATUS_LABELS = {
+    "pending": "",
+    "running": "RUNNING",
+    "completed": "OK",
+    "failed": "FAILED",
+    "cancelled": "CANCELLED",
+}
+
+
 class SDR2HDRGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("sdr2hdr")
-        self.root.geometry("760x580")
+        self.root.geometry("1120x720")
         self.state = AppState.IDLE
         self.event_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.worker: threading.Thread | None = None
@@ -108,18 +117,31 @@ class SDR2HDRGUI:
     def _build(self) -> None:
         outer = ttk.Frame(self.root, padding=16)
         outer.pack(fill="both", expand=True)
+        outer.columnconfigure(0, weight=3)
+        outer.columnconfigure(1, weight=2)
+        outer.rowconfigure(2, weight=1)
 
         title = ttk.Label(outer, text="SDR to HDR10 Converter", font=("Helvetica", 18, "bold"))
-        title.pack(anchor="w")
+        title.grid(row=0, column=0, columnspan=2, sticky="w")
         subtitle = ttk.Label(
             outer,
             text="Queued desktop UI for real footage conversion.",
             font=("Helvetica", 11),
         )
-        subtitle.pack(anchor="w", pady=(4, 16))
+        subtitle.grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 16))
 
-        form = ttk.Frame(outer)
-        form.pack(fill="x")
+        left = ttk.Frame(outer)
+        left.grid(row=2, column=0, sticky="nsew", padx=(0, 12))
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(4, weight=1)
+
+        right = ttk.Frame(outer)
+        right.grid(row=2, column=1, sticky="nsew")
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(2, weight=1)
+
+        form = ttk.Frame(left)
+        form.grid(row=0, column=0, sticky="ew")
         form.columnconfigure(1, weight=1)
 
         self.input_entry = self._add_path_row(form, 0, "Input", self.input_var, self._browse_input)
@@ -131,29 +153,8 @@ class SDR2HDRGUI:
         self.backend_combo = self._add_combo_row(form, 5, "Backend", self.backend_var, list(self.backend_options.values()))
         ttk.Label(form, textvariable=self.mode_hint_var).grid(row=6, column=1, sticky="w", pady=(4, 0))
 
-        queue_controls = ttk.Frame(outer)
-        queue_controls.pack(fill="x", pady=(12, 8))
-        self.add_queue_button = ttk.Button(queue_controls, text="Add To Queue", command=self._enqueue_current)
-        self.add_queue_button.pack(side="left")
-        self.add_files_button = ttk.Button(queue_controls, text="Add Files", command=self._enqueue_files)
-        self.add_files_button.pack(side="left", padx=(8, 0))
-        self.remove_queue_button = ttk.Button(queue_controls, text="Remove Selected", command=self._remove_selected_job)
-        self.remove_queue_button.pack(side="left", padx=(8, 0))
-        self.clear_queue_button = ttk.Button(queue_controls, text="Clear Queue", command=self._clear_queue)
-        self.clear_queue_button.pack(side="left", padx=(8, 0))
-
-        ttk.Label(outer, text="Queue").pack(anchor="w", pady=(8, 6))
-        self.queue_view = ttk.Treeview(outer, columns=("status", "input", "output"), show="headings", height=8)
-        self.queue_view.heading("status", text="Status")
-        self.queue_view.heading("input", text="Input")
-        self.queue_view.heading("output", text="Output")
-        self.queue_view.column("status", width=90, anchor="w")
-        self.queue_view.column("input", width=220, anchor="w")
-        self.queue_view.column("output", width=320, anchor="w")
-        self.queue_view.pack(fill="x")
-
-        controls = ttk.Frame(outer)
-        controls.pack(fill="x", pady=(16, 12))
+        controls = ttk.Frame(left)
+        controls.grid(row=1, column=0, sticky="ew", pady=(16, 12))
         self.start_button = ttk.Button(controls, text="Start Queue", command=self._start)
         self.start_button.pack(side="left")
         self.stop_button = ttk.Button(controls, text="Stop Current", command=self._stop)
@@ -163,16 +164,37 @@ class SDR2HDRGUI:
         self.open_folder_button = ttk.Button(controls, text="Open Folder", command=self._open_folder)
         self.open_folder_button.pack(side="left", padx=(8, 0))
 
-        status_frame = ttk.Frame(outer)
-        status_frame.pack(fill="x")
+        status_frame = ttk.Frame(left)
+        status_frame.grid(row=2, column=0, sticky="ew")
         ttk.Label(status_frame, textvariable=self.status_var, font=("Helvetica", 11, "bold")).pack(anchor="w")
         ttk.Label(status_frame, textvariable=self.progress_var).pack(anchor="w", pady=(4, 8))
         self.progress = ttk.Progressbar(status_frame, mode="determinate", maximum=100)
         self.progress.pack(fill="x")
 
-        ttk.Label(outer, text="Log").pack(anchor="w", pady=(16, 6))
-        self.log = tk.Text(outer, height=16, wrap="word", state="disabled")
-        self.log.pack(fill="both", expand=True)
+        ttk.Label(left, text="Log").grid(row=3, column=0, sticky="w", pady=(16, 6))
+        self.log = tk.Text(left, height=16, wrap="word", state="disabled")
+        self.log.grid(row=4, column=0, sticky="nsew")
+
+        queue_controls = ttk.Frame(right)
+        queue_controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.add_queue_button = ttk.Button(queue_controls, text="Add To Queue", command=self._enqueue_current)
+        self.add_queue_button.pack(side="left")
+        self.add_files_button = ttk.Button(queue_controls, text="Add Files", command=self._enqueue_files)
+        self.add_files_button.pack(side="left", padx=(8, 0))
+        self.remove_queue_button = ttk.Button(queue_controls, text="Remove Selected", command=self._remove_selected_job)
+        self.remove_queue_button.pack(side="left", padx=(8, 0))
+        self.clear_queue_button = ttk.Button(queue_controls, text="Clear Queue", command=self._clear_queue)
+        self.clear_queue_button.pack(side="left", padx=(8, 0))
+
+        ttk.Label(right, text="Queue").grid(row=1, column=0, sticky="w", pady=(8, 6))
+        self.queue_view = ttk.Treeview(right, columns=("status", "input", "output"), show="headings", height=14)
+        self.queue_view.heading("status", text="Status")
+        self.queue_view.heading("input", text="Input")
+        self.queue_view.heading("output", text="Output")
+        self.queue_view.column("status", width=90, anchor="w")
+        self.queue_view.column("input", width=170, anchor="w")
+        self.queue_view.column("output", width=220, anchor="w")
+        self.queue_view.grid(row=2, column=0, sticky="nsew")
 
         self.input_var.trace_add("write", self._sync_output_path)
         self.encoder_var.trace_add("write", self._sync_encoder_ui)
@@ -318,7 +340,11 @@ class SDR2HDRGUI:
                 "",
                 "end",
                 iid=str(index),
-                values=(status, Path(job.request.input_path).name, Path(job.request.output_path).name),
+                values=(
+                    STATUS_LABELS.get(status, status.upper()),
+                    Path(job.request.input_path).name,
+                    Path(job.request.output_path).name,
+                ),
             )
 
     def _enqueue_request(self, request: ConversionRequest) -> None:
