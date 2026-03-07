@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# Test artifacts
+test_input.mp4
+test_output*.mp4
+vt_probe.mp4
+review/
+
+# IDEs
+.idea/
+.vscode/
