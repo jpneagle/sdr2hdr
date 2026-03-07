@@ -1,5 +1,11 @@
 # sdr2hdr
 
+- [English](#english)
+- [日本語](#日本語)
+- [中文](#中文)
+
+## English
+
 `sdr2hdr` is an offline SDR-to-HDR10 converter for real-world video.
 
 The project is aimed at practical up-conversion on macOS and Windows, with a GUI-first workflow and a CLI for batch or scripted use. The current pipeline focuses on making SDR footage look natural on HDR displays rather than trying to hallucinate "true HDR capture."
@@ -258,6 +264,138 @@ Extract tonemapped HDR preview PNGs:
 ```bash
 sdr2hdr-frames output_hdr.mp4 review/hdr_frames --hdr-preview --count 4
 ```
+
+## 日本語
+
+`sdr2hdr` は、実写向けのオフライン SDR→HDR10 変換ツールです。macOS と Windows を対象にしており、GUI から複数ジョブをキューに積んで順番に処理できます。目的は「本物の HDR 撮影を再現すること」ではなく、「SDR 動画を HDR ディスプレイで自然に見える形へ安定して変換すること」です。
+
+### 主な特徴
+
+- SDR `BT.709` 動画を HDR10 互換 `HEVC Main10` へ変換
+- `m2ts` などのインターレース入力は自動でデインターレース
+- 肌、字幕、暗部ノイズ、白飛びしやすい領域を保護
+- シーン単位でハイライト強調量を調整
+- Apple Silicon では `MPS`、Windows + NVIDIA では `CUDA` を利用可能
+- macOS では `VideoToolbox`、Windows では `HEVC NVENC` を高速経路として利用
+- ハードウェアエンコード失敗時は `libx265` にフォールバック
+- 出力後に HDR メタデータを検証し、不足時は自動修復
+
+### 使い方
+
+インストール:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+```
+
+GUI 起動:
+
+```bash
+sdr2hdr
+```
+
+CLI 変換:
+
+```bash
+sdr2hdr input.mp4 output_hdr.mp4 --preset portrait
+```
+
+Windows + RTX 向けの例:
+
+```bash
+sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_nvenc --backend cuda
+```
+
+macOS 向けの例:
+
+```bash
+sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_videotoolbox
+```
+
+### 推奨設定
+
+- 実写素材の標準: `preset=portrait`
+- Apple Silicon:
+  - 高速重視: `hevc_videotoolbox`
+  - 品質重視: `libx265 + mps`
+- Windows + RTX 4090:
+  - 高速重視: `hevc_nvenc + auto`
+  - 品質重視: `libx265 + cuda`
+
+### 補足
+
+- `m2ts / mts / ts` 入力でも既定出力は `*_hdr.mp4`
+- MP4 にそのまま入らない音声は自動で `AAC` に変換
+- GUI では複数ファイルをキューに積んで順番に処理可能
+
+## 中文
+
+`sdr2hdr` 是一个面向实拍素材的离线 SDR→HDR10 转换工具，支持 macOS 和 Windows。它的目标不是“伪造真正的 HDR 拍摄素材”，而是把普通 SDR 视频稳定地转换成在 HDR 显示器上看起来更自然的 HDR10 文件。
+
+### 主要特性
+
+- 将 SDR `BT.709` 视频转换为 HDR10 兼容的 `HEVC Main10`
+- 对 `m2ts` 等隔行扫描输入自动做反交错
+- 保护肤色、字幕、暗部噪点和容易过曝的高亮区域
+- 按场景动态调整高亮增强强度
+- Apple Silicon 可使用 `MPS`
+- Windows + NVIDIA 可使用 `CUDA`
+- macOS 可使用 `VideoToolbox` 快速编码
+- Windows 可使用 `HEVC NVENC` 快速编码
+- 硬件编码失败时自动回退到 `libx265`
+- 输出完成后自动检查 HDR 元数据，必要时自动修复
+
+### 用法
+
+安装:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+```
+
+启动 GUI:
+
+```bash
+sdr2hdr
+```
+
+命令行转换:
+
+```bash
+sdr2hdr input.mp4 output_hdr.mp4 --preset portrait
+```
+
+Windows + RTX 示例:
+
+```bash
+sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_nvenc --backend cuda
+```
+
+macOS 示例:
+
+```bash
+sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_videotoolbox
+```
+
+### 推荐设置
+
+- 实拍素材默认建议: `preset=portrait`
+- Apple Silicon:
+  - 速度优先: `hevc_videotoolbox`
+  - 质量优先: `libx265 + mps`
+- Windows + RTX 4090:
+  - 速度优先: `hevc_nvenc + auto`
+  - 质量优先: `libx265 + cuda`
+
+### 备注
+
+- 即使输入是 `m2ts / mts / ts`，默认输出也会使用 `*_hdr.mp4`
+- 不能直接封装进 MP4 的音频会自动转成 `AAC`
+- GUI 支持把多个视频加入队列后依次处理
 
 Extract linear HDR EXR frames:
 
