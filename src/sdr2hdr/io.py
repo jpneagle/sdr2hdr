@@ -18,6 +18,7 @@ class VideoInfo:
     frames: int | None
     pix_fmt: str | None
     duration: float | None
+    field_order: str | None
 
 
 def ffprobe_video(path: str) -> VideoInfo:
@@ -28,7 +29,7 @@ def ffprobe_video(path: str) -> VideoInfo:
         "-select_streams",
         "v:0",
         "-show_entries",
-        "stream=width,height,avg_frame_rate,nb_frames,pix_fmt,duration:format=duration",
+        "stream=width,height,avg_frame_rate,nb_frames,pix_fmt,duration,field_order:format=duration",
         "-of",
         "json",
         path,
@@ -48,7 +49,13 @@ def ffprobe_video(path: str) -> VideoInfo:
         frames=int(frames) if frames and frames != "N/A" else None,
         pix_fmt=stream.get("pix_fmt"),
         duration=float(duration) if duration and duration != "N/A" else None,
+        field_order=stream.get("field_order"),
     )
+
+
+def is_interlaced_video(info: VideoInfo) -> bool:
+    field_order = (info.field_order or "").lower()
+    return field_order not in {"", "unknown", "progressive"}
 
 
 def open_decoder(path: str, info: VideoInfo) -> subprocess.Popen[bytes]:
@@ -58,6 +65,13 @@ def open_decoder(path: str, info: VideoInfo) -> subprocess.Popen[bytes]:
         "error",
         "-i",
         path,
+    ]
+    if is_interlaced_video(info):
+        cmd += [
+            "-vf",
+            "bwdif=mode=send_frame:parity=auto:deint=all",
+        ]
+    cmd += [
         "-f",
         "rawvideo",
         "-pix_fmt",

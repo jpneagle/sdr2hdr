@@ -7,6 +7,7 @@ The project is aimed at practical up-conversion on macOS and Windows, with a GUI
 ## What It Does
 
 - Converts SDR `BT.709` video to HDR10-compatible `HEVC Main10`
+- Automatically deinterlaces interlaced inputs such as broadcast-style `m2ts` before HDR processing
 - Preserves midtones and expands highlights instead of simply stretching the whole image
 - Protects skin, subtitles, dark noisy areas, and clipped white regions
 - Applies scene-aware highlight control to reduce white blowout on difficult footage
@@ -279,6 +280,7 @@ This writes:
 ## Notes
 
 - Input is assumed to be SDR `BT.709`
+- Interlaced inputs are automatically deinterlaced with `bwdif` during decode
 - Output is HDR10-compatible `HEVC Main10`
 - `torch` is optional, but recommended for Apple Silicon or CUDA acceleration
 - Windows `hevc_nvenc` requires an FFmpeg build with NVENC support
