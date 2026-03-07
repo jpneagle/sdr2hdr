@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 import tkinter as tk
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -67,6 +68,12 @@ class AppState:
     CANCELLED = "cancelled"
 
 
+@dataclass
+class QueueJob:
+    request: ConversionRequest
+    status: str = "pending"
+
+
 class SDR2HDRGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -77,6 +84,8 @@ class SDR2HDRGUI:
         self.worker: threading.Thread | None = None
         self.cancel_token: CancelToken | None = None
         self.last_output_path: str | None = None
+        self.queue_jobs: list[QueueJob] = []
+        self.current_job_index: int | None = None
 
         self.system_name = platform.system()
         self.encoder_options = build_encoder_options(self.system_name)
@@ -104,7 +113,7 @@ class SDR2HDRGUI:
         title.pack(anchor="w")
         subtitle = ttk.Label(
             outer,
-            text="Single-job desktop UI for real footage conversion.",
+            text="Queued desktop UI for real footage conversion.",
             font=("Helvetica", 11),
         )
         subtitle.pack(anchor="w", pady=(4, 16))
@@ -122,11 +131,32 @@ class SDR2HDRGUI:
         self.backend_combo = self._add_combo_row(form, 5, "Backend", self.backend_var, list(self.backend_options.values()))
         ttk.Label(form, textvariable=self.mode_hint_var).grid(row=6, column=1, sticky="w", pady=(4, 0))
 
+        queue_controls = ttk.Frame(outer)
+        queue_controls.pack(fill="x", pady=(12, 8))
+        self.add_queue_button = ttk.Button(queue_controls, text="Add To Queue", command=self._enqueue_current)
+        self.add_queue_button.pack(side="left")
+        self.add_files_button = ttk.Button(queue_controls, text="Add Files", command=self._enqueue_files)
+        self.add_files_button.pack(side="left", padx=(8, 0))
+        self.remove_queue_button = ttk.Button(queue_controls, text="Remove Selected", command=self._remove_selected_job)
+        self.remove_queue_button.pack(side="left", padx=(8, 0))
+        self.clear_queue_button = ttk.Button(queue_controls, text="Clear Queue", command=self._clear_queue)
+        self.clear_queue_button.pack(side="left", padx=(8, 0))
+
+        ttk.Label(outer, text="Queue").pack(anchor="w", pady=(8, 6))
+        self.queue_view = ttk.Treeview(outer, columns=("status", "input", "output"), show="headings", height=8)
+        self.queue_view.heading("status", text="Status")
+        self.queue_view.heading("input", text="Input")
+        self.queue_view.heading("output", text="Output")
+        self.queue_view.column("status", width=90, anchor="w")
+        self.queue_view.column("input", width=220, anchor="w")
+        self.queue_view.column("output", width=320, anchor="w")
+        self.queue_view.pack(fill="x")
+
         controls = ttk.Frame(outer)
         controls.pack(fill="x", pady=(16, 12))
-        self.start_button = ttk.Button(controls, text="Start", command=self._start)
+        self.start_button = ttk.Button(controls, text="Start Queue", command=self._start)
         self.start_button.pack(side="left")
-        self.stop_button = ttk.Button(controls, text="Stop", command=self._stop)
+        self.stop_button = ttk.Button(controls, text="Stop Current", command=self._stop)
         self.stop_button.pack(side="left", padx=(8, 0))
         self.open_output_button = ttk.Button(controls, text="Open Output", command=self._open_output)
         self.open_output_button.pack(side="left", padx=(8, 0))
@@ -150,6 +180,7 @@ class SDR2HDRGUI:
         self.backend_var.trace_add("write", self._sync_mode_hint)
         self._sync_encoder_ui()
         self._sync_mode_hint()
+        self._refresh_job_list()
 
     def _add_path_row(
         self,
@@ -268,21 +299,98 @@ class SDR2HDRGUI:
             keep_partial_output_on_cancel=True,
         )
 
-    def _start(self) -> None:
-        try:
-            request = self._build_request()
-            if not request.input_path:
-                raise ValueError("Input path is required.")
-            if not request.output_path:
-                raise ValueError("Output path is required.")
-        except ValueError as exc:
-            messagebox.showerror("Cannot start", str(exc))
-            return
+    def _validate_request(self, request: ConversionRequest) -> None:
+        if not request.input_path:
+            raise ValueError("Input path is required.")
+        if not request.output_path:
+            raise ValueError("Output path is required.")
 
+    def _make_job_label(self, request: ConversionRequest) -> tuple[str, str, str]:
+        return ("pending", Path(request.input_path).name, Path(request.output_path).name)
+
+    def _refresh_job_list(self) -> None:
+        self.queue_view.delete(*self.queue_view.get_children())
+        for index, job in enumerate(self.queue_jobs):
+            status = job.status
+            if self.current_job_index == index and self.state == AppState.RUNNING:
+                status = "running"
+            self.queue_view.insert(
+                "",
+                "end",
+                iid=str(index),
+                values=(status, Path(job.request.input_path).name, Path(job.request.output_path).name),
+            )
+
+    def _enqueue_request(self, request: ConversionRequest) -> None:
+        self._validate_request(request)
+        self.queue_jobs.append(QueueJob(request=request))
+        self.last_output_path = request.output_path
+        self._refresh_job_list()
+        self._log(f"Queued: {Path(request.input_path).name}")
+
+    def _enqueue_current(self) -> None:
+        try:
+            self._enqueue_request(self._build_request())
+        except ValueError as exc:
+            messagebox.showerror("Cannot queue", str(exc))
+
+    def _enqueue_files(self) -> None:
+        paths = filedialog.askopenfilenames(title="Select input videos")
+        if not paths:
+            return
+        for raw_path in paths:
+            input_path = str(raw_path)
+            output_path = build_output_path(input_path)
+            request = ConversionRequest(
+                input_path=input_path,
+                output_path=output_path,
+                preset=self.preset_var.get(),
+                encoder=self._selected_encoder(),
+                x265_mode=self._selected_x265_mode(),
+                backend=self._selected_backend(),
+                fallback_to_x265_on_hardware_error=True,
+                keep_partial_output_on_cancel=True,
+            )
+            self._enqueue_request(request)
+
+    def _selected_job_indices(self) -> list[int]:
+        return sorted((int(item_id) for item_id in self.queue_view.selection()), reverse=True)
+
+    def _remove_selected_job(self) -> None:
+        if self.state == AppState.RUNNING:
+            return
+        removed = False
+        for index in self._selected_job_indices():
+            if 0 <= index < len(self.queue_jobs):
+                del self.queue_jobs[index]
+                removed = True
+        if removed:
+            self._refresh_job_list()
+            self._log("Removed selected queue items")
+
+    def _clear_queue(self) -> None:
+        if self.state == AppState.RUNNING:
+            return
+        self.queue_jobs.clear()
+        self.current_job_index = None
+        self._refresh_job_list()
+        self._log("Cleared queue")
+
+    def _next_pending_job_index(self) -> int | None:
+        for index, job in enumerate(self.queue_jobs):
+            if job.status == "pending":
+                return index
+        return None
+
+    def _start_job(self, index: int) -> None:
+        request = self.queue_jobs[index].request
+        self.current_job_index = index
+        self.queue_jobs[index].status = "running"
         self.cancel_token = CancelToken()
         self.last_output_path = request.output_path
         self.progress.configure(mode="indeterminate", value=0)
         self.progress.start(10)
+        self._refresh_job_list()
         self._log(f"Starting conversion: {Path(request.input_path).name}")
         self._set_state(AppState.RUNNING)
 
@@ -301,6 +409,20 @@ class SDR2HDRGUI:
 
         self.worker = threading.Thread(target=worker, daemon=True)
         self.worker.start()
+
+    def _start(self) -> None:
+        if self.state == AppState.RUNNING:
+            return
+        if not self.queue_jobs:
+            try:
+                self._enqueue_request(self._build_request())
+            except ValueError as exc:
+                messagebox.showerror("Cannot start", str(exc))
+                return
+        next_index = self._next_pending_job_index()
+        if next_index is None:
+            return
+        self._start_job(next_index)
 
     def _stop(self) -> None:
         if self.cancel_token is not None:
@@ -327,6 +449,10 @@ class SDR2HDRGUI:
         self.output_entry.configure(state=field_state)
         self.start_button.configure(state="disabled" if running else "normal")
         self.stop_button.configure(state="normal" if running else "disabled")
+        self.add_queue_button.configure(state="disabled" if running else "normal")
+        self.add_files_button.configure(state="disabled" if running else "normal")
+        self.remove_queue_button.configure(state="disabled" if running else "normal")
+        self.clear_queue_button.configure(state="disabled" if running else "normal")
         self.open_output_button.configure(state="normal" if idle_like and self.last_output_path else "disabled")
         self.open_folder_button.configure(state="normal" if idle_like and self.last_output_path else "disabled")
         self.preset_combo.configure(state=combo_state)
@@ -354,6 +480,10 @@ class SDR2HDRGUI:
                 result = payload
                 self.progress.stop()
                 self.progress.configure(value=100 if not result.cancelled else 0)
+                if self.current_job_index is not None:
+                    self.queue_jobs[self.current_job_index].status = "cancelled" if result.cancelled else "completed"
+                    self.last_output_path = self.queue_jobs[self.current_job_index].request.output_path
+                self._refresh_job_list()
                 if result.cancelled:
                     self.status_var.set("Cancelled")
                     self.progress_var.set(f"{result.processed_frames} frames processed; partial output saved")
@@ -363,17 +493,30 @@ class SDR2HDRGUI:
                     self.status_var.set("Completed")
                     self.progress_var.set(f"{result.processed_frames} frames written")
                     self._log(f"Completed: {Path(result.output_path).name}")
-                    self._set_state(AppState.COMPLETED)
+                    next_index = self._next_pending_job_index()
+                    if next_index is not None:
+                        self._set_state(AppState.IDLE)
+                        self._start_job(next_index)
+                    else:
+                        self._set_state(AppState.COMPLETED)
             elif kind == "error":
                 self._log(str(payload))
             elif kind == "failed":
                 self.progress.stop()
                 self.progress.configure(value=0)
+                if self.current_job_index is not None:
+                    self.queue_jobs[self.current_job_index].status = "failed"
+                    self._refresh_job_list()
                 self.status_var.set("Failed")
                 self.progress_var.set("Conversion failed")
                 self._log(str(payload))
                 messagebox.showerror("Conversion failed", str(payload))
-                self._set_state(AppState.FAILED)
+                next_index = self._next_pending_job_index()
+                if next_index is not None:
+                    self._set_state(AppState.IDLE)
+                    self._start_job(next_index)
+                else:
+                    self._set_state(AppState.FAILED)
         self.root.after(100, self._drain_events)
 
 

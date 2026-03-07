@@ -88,11 +88,17 @@ Current behavior:
 - on macOS, the GUI defaults to `VideoToolbox` as the encoder
 - on Windows, the GUI defaults to `NVENC` as the encoder
 - if hardware encoding fails, the GUI falls back to `libx265`
+- multiple jobs can be queued and processed one by one
 - pressing `Stop` keeps a playable partial output when frames have already been written
+- transport-stream inputs such as `m2ts` default to `*_hdr.mp4` outputs
 
 The GUI exposes:
 
 - input / output path selection
+- add current job to queue
+- add multiple input files to queue
+- remove / clear queued jobs
+- sequential queue execution
 - preset selection
 - encoder selection
 - speed / quality selection

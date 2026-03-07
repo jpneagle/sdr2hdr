@@ -21,6 +21,10 @@ class AppTests(unittest.TestCase):
     def test_build_output_path_adds_hdr_suffix(self) -> None:
         self.assertEqual(build_output_path("/tmp/example.mp4"), "/tmp/example_hdr.mp4")
 
+    def test_build_output_path_converts_transport_stream_extensions_to_mp4(self) -> None:
+        self.assertEqual(build_output_path("/tmp/example.m2ts"), "/tmp/example_hdr.mp4")
+        self.assertEqual(build_output_path("/tmp/example.ts"), "/tmp/example_hdr.mp4")
+
     def test_detects_videotoolbox_failure_message(self) -> None:
         self.assertTrue(is_videotoolbox_failure("Error: cannot create compression session: -12908"))
         self.assertTrue(is_videotoolbox_failure("hevc_videotoolbox failed"))

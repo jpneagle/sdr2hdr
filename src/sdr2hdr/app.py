@@ -114,7 +114,9 @@ def build_output_path(input_path: str) -> str:
     path = Path(input_path)
     if not path.suffix:
         return str(path.with_name(f"{path.name}_hdr"))
-    return str(path.with_name(f"{path.stem}_hdr{path.suffix}"))
+    suffix = path.suffix.lower()
+    output_suffix = ".mp4" if suffix in {".m2ts", ".mts", ".m2t", ".ts"} else path.suffix
+    return str(path.with_name(f"{path.stem}_hdr{output_suffix}"))
 
 
 def build_request_config(request: ConversionRequest) -> tuple[ProcessorConfig, str, int]:
