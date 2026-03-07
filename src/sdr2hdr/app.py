@@ -316,12 +316,26 @@ def _run_conversion_once(
             _wait_terminated_process(decoder)
             finalize_process(encoder, "encoder", allow_broken_pipe=True)
         else:
-            finalize_process(decoder, "decoder", allow_broken_pipe=bool(request.max_frames))
-            finalize_process(
-                encoder,
-                "encoder",
-                allow_broken_pipe=bool(request.max_frames) or encoder_broken_pipe,
-            )
+            encoder_error: RuntimeError | None = None
+            try:
+                finalize_process(
+                    encoder,
+                    "encoder",
+                    allow_broken_pipe=bool(request.max_frames) or encoder_broken_pipe,
+                )
+            except RuntimeError as exc:
+                encoder_error = exc
+            try:
+                finalize_process(
+                    decoder,
+                    "decoder",
+                    allow_broken_pipe=bool(request.max_frames) or encoder_broken_pipe or encoder_error is not None,
+                )
+            except RuntimeError:
+                if encoder_error is None:
+                    raise
+            if encoder_error is not None:
+                raise encoder_error
     if cancelled:
         if request.keep_partial_output_on_cancel and processed > 0:
             restamp_hdr_metadata(request.output_path)
