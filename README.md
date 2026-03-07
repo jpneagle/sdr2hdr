@@ -40,6 +40,39 @@ source .venv/bin/activate
 pip install -e .[dev]
 ```
 
+### GPU acceleration (strongly recommended)
+
+`torch` is an optional dependency, but without it the pipeline runs on CPU (numpy path) and will be very slow.
+
+**Windows + NVIDIA GPU (CUDA)**
+
+`pip install torch` from PyPI installs a CPU-only build. You must install the CUDA-enabled build explicitly:
+
+```bash
+# CUDA 12.6 wheels work with driver-reported CUDA 12.x and 13.x
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+```
+
+Verify that CUDA is available after installation:
+
+```bash
+python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
+```
+
+Both lines should print `True` and your GPU name. Once confirmed, set `--backend cuda` (or leave `--backend auto`) and restart the app.
+
+**macOS (Apple Silicon)**
+
+```bash
+pip install torch
+```
+
+The default PyPI build includes MPS support. No extra index URL is needed.
+
+**CPU-only fallback**
+
+If you skip `torch` entirely, the numpy path is used automatically. Expect roughly 0.3 FPS on full-HD frames — suitable only for quick tests.
+
 ## GUI
 
 Launch the app with:
