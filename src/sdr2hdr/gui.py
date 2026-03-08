@@ -41,18 +41,16 @@ def describe_mode_hint(encoder: str, mode: str, backend: str, preset: str, model
         speed = "Slowest x265 mode, best compression quality."
     else:
         speed = "Balanced x265 mode for daily use."
-    if preset == "portrait-ml":
-        if not model_path.strip():
-            return speed + " portrait-ml requires a learned model path."
+    if model_path.strip():
         if backend == "cuda":
-            return speed + " Uses NVIDIA GPU for learned-map processing."
+            return speed + " Learned-map mode enabled on NVIDIA GPU."
         if backend == "mps":
-            return speed + " Uses Apple GPU for learned-map processing."
-        return speed + " Uses a learned map model."
+            return speed + " Learned-map mode enabled on Apple GPU."
+        return speed + " Learned-map mode enabled."
     if backend == "mps":
         return speed + " Uses Apple GPU."
     if backend == "cuda":
-        return speed + " Uses NVIDIA GPU for processing. Recommended for portrait-ml with a learned model."
+        return speed + " Uses NVIDIA GPU for processing."
     return speed
 
 def build_encoder_options(system_name: str | None = None) -> dict[str, str]:

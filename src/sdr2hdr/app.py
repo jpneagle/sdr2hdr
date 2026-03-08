@@ -53,23 +53,6 @@ PRESETS = {
         near_white_rolloff_start=0.74,
         near_white_rolloff_strength=0.72,
     ),
-    "portrait-ml": ProcessorConfig(
-        peak_nits=800.0,
-        ai_strength=0.45,
-        detail_boost=0.12,
-        scene_smoothing=0.93,
-        scene_cut_threshold=0.14,
-        highlight_boost=0.72,
-        subtitle_protection=0.90,
-        shadow_noise_floor=0.10,
-        skin_protection=0.82,
-        shadow_rolloff=0.62,
-        processing_scale=0.85,
-        fast_mode=True,
-        clipped_white_protection=0.78,
-        near_white_rolloff_start=0.74,
-        near_white_rolloff_strength=0.72,
-    ),
 }
 
 X265_PROFILE_DEFAULTS = {
@@ -138,6 +121,8 @@ def build_output_path(input_path: str) -> str:
 
 def build_request_config(request: ConversionRequest) -> tuple[ProcessorConfig, str, int]:
     config = replace(PRESETS[request.preset])
+    if request.preset == "portrait" and request.model_path and request.ai_strength is None:
+        config.ai_strength = 0.45
     if request.peak_nits is not None:
         config.peak_nits = request.peak_nits
     if request.ai_strength is not None:
@@ -172,8 +157,6 @@ def validate_request(request: ConversionRequest) -> None:
         raise ValueError(f"Unknown x265 mode: {request.x265_mode}")
     if request.model_path and not Path(request.model_path).exists():
         raise ValueError(f"Model file does not exist: {request.model_path}")
-    if request.preset == "portrait-ml" and not request.model_path:
-        raise ValueError("portrait-ml requires a learned model path.")
 
 
 def resolve_model_device(request: ConversionRequest, torch_device: str | None) -> str:

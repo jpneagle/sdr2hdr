@@ -21,13 +21,9 @@ class GuiTests(unittest.TestCase):
         self.assertIn("hevc_videotoolbox", options)
         self.assertNotIn("hevc_nvenc", options)
 
-    def test_describe_mode_hint_warns_when_portrait_ml_has_no_model(self) -> None:
-        hint = describe_mode_hint("libx265", "balanced", "mps", "portrait-ml", "")
-        self.assertIn("requires a learned model path", hint)
-
-    def test_describe_mode_hint_mentions_cuda_for_portrait_ml(self) -> None:
-        hint = describe_mode_hint("libx265", "balanced", "cuda", "portrait-ml", "/tmp/model.pt")
-        self.assertIn("NVIDIA GPU", hint)
+    def test_describe_mode_hint_mentions_learned_mode_when_model_is_set(self) -> None:
+        hint = describe_mode_hint("libx265", "balanced", "cuda", "portrait", "/tmp/model.pt")
+        self.assertIn("Learned-map mode", hint)
 
 
 if __name__ == "__main__":

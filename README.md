@@ -6,9 +6,9 @@
 
 ## English
 
-`sdr2hdr` is an offline SDR-to-HDR10 converter for real-world video.
+`sdr2hdr` is an AI-enhanced offline SDR-to-HDR10 converter for real-world video.
 
-The project is aimed at practical up-conversion on macOS and Windows, with a GUI-first workflow and a CLI for batch or scripted use. The current pipeline focuses on making SDR footage look natural on HDR displays rather than trying to hallucinate "true HDR capture."
+The project is aimed at practical up-conversion on macOS and Windows, with a GUI-first workflow and a CLI for batch or scripted use. Its core pipeline combines rule-based HDR reconstruction with learned enhancement maps trained from HDR/SDR pairs, so the output stays natural while still gaining scene-aware highlight and detail recovery.
 
 ## What It Does
 
@@ -107,6 +107,26 @@ The default PyPI build includes MPS support. No extra index URL is needed.
 
 If you skip `torch` entirely, the numpy path is used automatically. Expect roughly 0.3 FPS on full-HD frames — suitable only for quick tests.
 
+## Model Download
+
+Pretrained learned-map model:
+
+- `enhancement_model_20260308beta.pt`
+- Release page: https://github.com/jpneagle/sdr2hdr/releases/tag/model
+
+Recommended usage:
+
+```bash
+sdr2hdr input.mp4 output_hdr.mp4 \
+  --preset portrait \
+  --model-path /path/to/enhancement_model_20260308beta.pt
+```
+
+Recommended backends:
+
+- macOS: `mps`
+- Windows + NVIDIA: `cuda`
+
 ## GUI
 
 Launch the app with:
@@ -136,11 +156,9 @@ The GUI exposes:
 - encoder selection
 - speed / quality selection
 - backend selection
-- model path selection for learned-map runs
+- optional model path selection for learned-map runs
 - progress, status, and logs
 - open output / open output folder actions
-
-If you choose `portrait-ml`, the GUI requires a TorchScript model in `Model Path` before queuing or starting a job.
 
 ## CLI
 
@@ -160,7 +178,7 @@ sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_videotoolbox
 sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_nvenc --backend cuda
 
 # Learned-map run on Windows + RTX
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait-ml --encoder hevc_nvenc --backend cuda --model-path enhancement_model.pt
+sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_nvenc --backend cuda --model-path enhancement_model.pt
 
 # MPS processing + x265 preview export
 sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder libx265 --backend mps --x265-mode preview
@@ -174,7 +192,7 @@ sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder libx265 --backend m
 
 Useful options:
 
-- `--preset poc|balanced|high|portrait|portrait-ml`
+- `--preset poc|balanced|high|portrait`
 - `--encoder hevc_videotoolbox|hevc_nvenc|libx265`
 - `--backend auto|mps|cuda|torch-cpu|numpy`
 - `--x265-mode preview|balanced|final`
@@ -188,13 +206,7 @@ Useful options:
   - more conservative highlight expansion
   - stronger white protection
   - fast subtitle mask path
-
-- `portrait-ml`
-  - live-action preset intended for use with `--model-path`
-  - keeps the same protection profile as `portrait`
-  - defaults to stronger model blending with `ai_strength=0.45`
-  - useful when you want the learned maps to show a clearer difference
-  - in the GUI, selecting this preset requires `Model Path`
+  - if `--model-path` is supplied, portrait automatically switches to stronger learned-map blending
 
 - `balanced`
   - general-purpose preset
@@ -247,13 +259,13 @@ For Windows + RTX 4090 live-action footage:
 For Windows + RTX 4090 with a learned map model:
 
 - quickest comparison
-  - `preset=portrait-ml`
+  - `preset=portrait`
   - `encoder=hevc_nvenc`
   - `backend=cuda`
   - `model-path=/path/to/enhancement_model.pt`
 
 - final export
-  - `preset=portrait-ml`
+  - `preset=portrait`
   - `encoder=libx265`
   - `backend=cuda`
   - `x265-mode=balanced` or `final`
@@ -322,7 +334,7 @@ sdr2hdr-frames output_hdr.mp4 review/hdr_frames --hdr-preview --count 4
 
 ## 日本語
 
-`sdr2hdr` は、実写向けのオフライン SDR→HDR10 変換ツールです。macOS と Windows を対象にしており、GUI から複数ジョブをキューに積んで順番に処理できます。目的は「本物の HDR 撮影を再現すること」ではなく、「SDR 動画を HDR ディスプレイで自然に見える形へ安定して変換すること」です。
+`sdr2hdr` は、AI 学習済み enhancement map とルールベース処理を組み合わせた、実写向けのオフライン SDR→HDR10 変換ツールです。macOS と Windows を対象にしており、GUI から複数ジョブをキューに積んで順番に処理できます。目的は「本物の HDR 撮影を再現すること」ではなく、「SDR 動画を HDR ディスプレイで自然に見える形へ安定して変換すること」です。
 
 ### 主な特徴
 
@@ -356,6 +368,11 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
 ```
+
+学習済みモデル:
+
+- `enhancement_model_20260308beta.pt`
+- ダウンロード: https://github.com/jpneagle/sdr2hdr/releases/tag/model
 
 GUI 起動:
 
@@ -399,7 +416,7 @@ sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_videotoolbox
 
 ## 中文
 
-`sdr2hdr` 是一个面向实拍素材的离线 SDR→HDR10 转换工具，支持 macOS 和 Windows。它的目标不是“伪造真正的 HDR 拍摄素材”，而是把普通 SDR 视频稳定地转换成在 HDR 显示器上看起来更自然的 HDR10 文件。
+`sdr2hdr` 是一个把 AI 学习得到的 enhancement map 与规则式处理结合起来的离线 SDR→HDR10 转换工具，面向实拍素材，支持 macOS 和 Windows。它的目标不是“伪造真正的 HDR 拍摄素材”，而是把普通 SDR 视频稳定地转换成在 HDR 显示器上看起来更自然的 HDR10 文件。
 
 ### 主要特性
 
@@ -435,6 +452,11 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
 ```
+
+预训练模型:
+
+- `enhancement_model_20260308beta.pt`
+- 下载地址: https://github.com/jpneagle/sdr2hdr/releases/tag/model
 
 启动 GUI:
 

@@ -8,6 +8,7 @@ from sdr2hdr.app import (
     CancelToken,
     ConversionCallbacks,
     ConversionRequest,
+    build_request_config,
     build_output_path,
     default_encoder_for_platform,
     is_hardware_encoder_failure,
@@ -43,13 +44,20 @@ class AppTests(unittest.TestCase):
         self.assertEqual(default_encoder_for_platform("Windows"), "hevc_nvenc")
         self.assertEqual(default_encoder_for_platform("Linux"), "libx265")
 
-    def test_portrait_ml_requires_model_path(self) -> None:
+    def test_portrait_uses_stronger_default_ai_strength_when_model_path_is_set(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "in.mp4"
+            model_path = Path(temp_dir) / "model.pt"
             input_path.write_bytes(b"")
-            request = ConversionRequest(input_path=str(input_path), output_path=str(Path(temp_dir) / "out.mp4"), preset="portrait-ml")
-            with self.assertRaises(ValueError):
-                validate_request(request)
+            model_path.write_bytes(b"")
+            request = ConversionRequest(
+                input_path=str(input_path),
+                output_path=str(Path(temp_dir) / "out.mp4"),
+                preset="portrait",
+                model_path=str(model_path),
+            )
+            config, _, _ = build_request_config(request)
+            self.assertEqual(config.ai_strength, 0.45)
 
     def test_validate_request_rejects_missing_model_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
