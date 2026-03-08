@@ -53,6 +53,10 @@ def describe_mode_hint(encoder: str, mode: str, backend: str, preset: str, model
         return speed + " Uses NVIDIA GPU for processing."
     return speed
 
+
+def format_ai_strength(value: float) -> str:
+    return f"{value:.2f}"
+
 def build_encoder_options(system_name: str | None = None) -> dict[str, str]:
     system_name = system_name or platform.system()
     options = {"libx265": "libx265 (Quality)"}
@@ -132,6 +136,8 @@ class SDR2HDRGUI:
         self.x265_mode_var = tk.StringVar(value=X265_MODE_OPTIONS["balanced"])
         self.backend_var = tk.StringVar(value=self.backend_options["auto"])
         self.model_path_var = tk.StringVar()
+        self.ai_strength_var = tk.DoubleVar(value=0.35)
+        self.ai_strength_label_var = tk.StringVar(value=format_ai_strength(0.35))
         self.status_var = tk.StringVar(value="Idle")
         self.progress_var = tk.StringVar(value="0 frames")
         self.mode_hint_var = tk.StringVar(value="")
@@ -178,7 +184,21 @@ class SDR2HDRGUI:
         self.x265_combo = self._add_combo_row(form, 4, "Speed/Quality", self.x265_mode_var, list(X265_MODE_OPTIONS.values()))
         self.backend_combo = self._add_combo_row(form, 5, "Backend", self.backend_var, list(self.backend_options.values()))
         self.model_entry = self._add_path_row(form, 6, "Model Path", self.model_path_var, self._browse_model)
-        ttk.Label(form, textvariable=self.mode_hint_var).grid(row=7, column=1, sticky="w", pady=(4, 0))
+        ttk.Label(form, text="AI Strength").grid(row=7, column=0, sticky="w", pady=6, padx=(0, 12))
+        slider_row = ttk.Frame(form)
+        slider_row.grid(row=7, column=1, sticky="ew", pady=6)
+        slider_row.columnconfigure(0, weight=1)
+        self.ai_strength_scale = ttk.Scale(
+            slider_row,
+            from_=0.0,
+            to=0.8,
+            orient="horizontal",
+            variable=self.ai_strength_var,
+            command=self._sync_ai_strength_label,
+        )
+        self.ai_strength_scale.grid(row=0, column=0, sticky="ew")
+        ttk.Label(slider_row, textvariable=self.ai_strength_label_var, width=5).grid(row=0, column=1, padx=(8, 0))
+        ttk.Label(form, textvariable=self.mode_hint_var).grid(row=8, column=1, sticky="w", pady=(4, 0))
 
         controls = ttk.Frame(left)
         controls.grid(row=1, column=0, sticky="ew", pady=(16, 12))
@@ -228,8 +248,10 @@ class SDR2HDRGUI:
         self.x265_mode_var.trace_add("write", self._sync_mode_hint)
         self.backend_var.trace_add("write", self._sync_mode_hint)
         self.preset_var.trace_add("write", self._sync_mode_hint)
-        self.model_path_var.trace_add("write", self._sync_mode_hint)
+        self.model_path_var.trace_add("write", self._sync_model_controls)
         self._sync_encoder_ui()
+        self._sync_ai_strength_label()
+        self._sync_model_controls()
         self._sync_mode_hint()
         self._refresh_job_list()
 
@@ -285,6 +307,16 @@ class SDR2HDRGUI:
                 self.model_path_var.get(),
             )
         )
+
+    def _sync_ai_strength_label(self, *_: object) -> None:
+        self.ai_strength_label_var.set(format_ai_strength(self.ai_strength_var.get()))
+
+    def _sync_model_controls(self, *_: object) -> None:
+        has_model = bool(self.model_path_var.get().strip())
+        scale_state = "normal" if has_model and self.state != AppState.RUNNING else "disabled"
+        self.ai_strength_scale.configure(state=scale_state)
+        self._sync_ai_strength_label()
+        self._sync_mode_hint()
 
     def _selected_encoder(self) -> str:
         for key, label in self.encoder_options.items():
@@ -343,6 +375,7 @@ class SDR2HDRGUI:
             x265_mode=self._selected_x265_mode(),
             backend=self._selected_backend(),
             model_path=self.model_path_var.get().strip() or None,
+            ai_strength=self.ai_strength_var.get() if self.model_path_var.get().strip() else None,
             device="auto",
             fallback_to_x265_on_hardware_error=True,
             keep_partial_output_on_cancel=True,
@@ -403,6 +436,7 @@ class SDR2HDRGUI:
                 x265_mode=self._selected_x265_mode(),
                 backend=self._selected_backend(),
                 model_path=self.model_path_var.get().strip() or None,
+                ai_strength=self.ai_strength_var.get() if self.model_path_var.get().strip() else None,
                 device="auto",
                 fallback_to_x265_on_hardware_error=True,
                 keep_partial_output_on_cancel=True,
@@ -516,6 +550,7 @@ class SDR2HDRGUI:
         self.encoder_combo.configure(state=combo_state)
         self.backend_combo.configure(state=combo_state)
         self._sync_encoder_ui()
+        self._sync_model_controls()
 
     def _drain_events(self) -> None:
         while True:

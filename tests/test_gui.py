@@ -1,6 +1,6 @@
 import unittest
 
-from sdr2hdr.gui import build_backend_options, build_encoder_options, describe_mode_hint
+from sdr2hdr.gui import build_backend_options, build_encoder_options, describe_mode_hint, format_ai_strength
 
 
 class GuiTests(unittest.TestCase):
@@ -24,6 +24,9 @@ class GuiTests(unittest.TestCase):
     def test_describe_mode_hint_mentions_learned_mode_when_model_is_set(self) -> None:
         hint = describe_mode_hint("libx265", "balanced", "cuda", "portrait", "/tmp/model.pt")
         self.assertIn("Learned-map mode", hint)
+
+    def test_format_ai_strength(self) -> None:
+        self.assertEqual(format_ai_strength(0.35), "0.35")
 
 
 if __name__ == "__main__":

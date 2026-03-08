@@ -57,7 +57,7 @@ class AppTests(unittest.TestCase):
                 model_path=str(model_path),
             )
             config, _, _ = build_request_config(request)
-            self.assertEqual(config.ai_strength, 0.45)
+            self.assertEqual(config.ai_strength, 0.35)
 
     def test_validate_request_rejects_missing_model_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
