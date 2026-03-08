@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reserved for future scene-cut detection strategy",
     )
     parser.add_argument("--model-path", help="Optional TorchScript map-estimation model path")
-    parser.add_argument("--device", default="cpu", help="Torch device when --model-path is supplied")
+    parser.add_argument("--device", default="auto", help="Torch device when --model-path is supplied")
     parser.add_argument("--max-frames", type=int, help="Limit the number of processed frames for debugging")
     return parser
 

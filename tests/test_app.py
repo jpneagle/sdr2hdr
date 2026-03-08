@@ -12,6 +12,8 @@ from sdr2hdr.app import (
     default_encoder_for_platform,
     is_hardware_encoder_failure,
     is_videotoolbox_failure,
+    resolve_model_device,
+    validate_request,
     run_conversion,
 )
 from sdr2hdr.io import has_expected_hdr_metadata
@@ -40,6 +42,32 @@ class AppTests(unittest.TestCase):
         self.assertEqual(default_encoder_for_platform("Darwin"), "hevc_videotoolbox")
         self.assertEqual(default_encoder_for_platform("Windows"), "hevc_nvenc")
         self.assertEqual(default_encoder_for_platform("Linux"), "libx265")
+
+    def test_portrait_ml_requires_model_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "in.mp4"
+            input_path.write_bytes(b"")
+            request = ConversionRequest(input_path=str(input_path), output_path=str(Path(temp_dir) / "out.mp4"), preset="portrait-ml")
+            with self.assertRaises(ValueError):
+                validate_request(request)
+
+    def test_validate_request_rejects_missing_model_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "in.mp4"
+            input_path.write_bytes(b"")
+            request = ConversionRequest(
+                input_path=str(input_path),
+                output_path=str(Path(temp_dir) / "out.mp4"),
+                preset="portrait",
+                model_path=str(Path(temp_dir) / "missing.pt"),
+            )
+            with self.assertRaises(ValueError):
+                validate_request(request)
+
+    def test_resolve_model_device_uses_backend_resolved_device_for_auto(self) -> None:
+        request = ConversionRequest(input_path="/tmp/in.mp4", output_path="/tmp/out.mp4", device="auto")
+        self.assertEqual(resolve_model_device(request, "mps"), "mps")
+        self.assertEqual(resolve_model_device(request, None), "cpu")
 
     def test_run_conversion_respects_cancel_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

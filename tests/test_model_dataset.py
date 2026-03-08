@@ -80,6 +80,19 @@ class ModelDatasetTests(unittest.TestCase):
             self.assertEqual(maps.contrast.shape, (16, 16))
             self.assertEqual(maps.protection.shape, (16, 16))
 
+    def test_torch_map_enhancer_preserves_output_shape_with_low_res_inference(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "enhancer.pt"
+            model = EnhancementUNet().eval()
+            scripted = torch.jit.script(model)
+            torch.jit.save(scripted, str(model_path))
+            enhancer = TorchMapEnhancer(str(model_path), device="cpu", inference_scale=0.5)
+            frame = np.full((73, 121, 3), 0.25, dtype=np.float32)
+            maps = enhancer.estimate(frame)
+            self.assertEqual(maps.expansion.shape, (73, 121))
+            self.assertTrue(np.all(maps.expansion >= 0.0))
+            self.assertTrue(np.all(maps.expansion <= 1.0))
+
 
 if __name__ == "__main__":
     unittest.main()

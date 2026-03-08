@@ -170,6 +170,16 @@ def validate_request(request: ConversionRequest) -> None:
         raise ValueError(f"Unknown preset: {request.preset}")
     if request.x265_mode not in X265_PROFILE_DEFAULTS:
         raise ValueError(f"Unknown x265 mode: {request.x265_mode}")
+    if request.model_path and not Path(request.model_path).exists():
+        raise ValueError(f"Model file does not exist: {request.model_path}")
+    if request.preset == "portrait-ml" and not request.model_path:
+        raise ValueError("portrait-ml requires a learned model path.")
+
+
+def resolve_model_device(request: ConversionRequest, torch_device: str | None) -> str:
+    if request.device != "auto":
+        return request.device
+    return torch_device or "cpu"
 
 
 def _emit_status(callbacks: ConversionCallbacks | None, message: str) -> None:
@@ -281,10 +291,12 @@ def _run_conversion_once(
     config, x265_preset, x265_crf = build_request_config(request)
     info = ffprobe_video(request.input_path)
     total_frames = request.max_frames if request.max_frames is not None else info.frames
-    processor = SDRToHDRProcessor(
-        config,
-        enhancer=TorchMapEnhancer(request.model_path, device=request.device) if request.model_path else HeuristicEnhancer(),
-    )
+    processor = SDRToHDRProcessor(config, enhancer=HeuristicEnhancer())
+    if request.model_path:
+        processor.enhancer = TorchMapEnhancer(
+            request.model_path,
+            device=resolve_model_device(request, processor.torch_device),
+        )
     decoder = open_decoder(request.input_path, info)
     encoder = open_encoder(
         request.output_path,

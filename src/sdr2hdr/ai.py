@@ -7,8 +7,10 @@ import numpy as np
 
 try:
     import torch
+    import torch.nn.functional as F
 except ImportError:  # pragma: no cover - optional dependency
     torch = None
+    F = None
 
 
 @dataclass
@@ -53,27 +55,69 @@ class TorchMapEnhancer(BaseEnhancer):
     The model is expected to return 3 channels: expansion, contrast, protection.
     """
 
-    def __init__(self, model_path: str, device: str = "cpu") -> None:
+    def __init__(self, model_path: str, device: str = "cpu", inference_scale: float = 0.5) -> None:
         if torch is None:  # pragma: no cover - optional dependency
             raise RuntimeError("torch is not installed; install sdr2hdr[ai] to use model inference")
         self.device = torch.device(device)
         self.model = torch.jit.load(model_path, map_location=self.device)
         self.model.eval()
+        self.inference_scale = float(np.clip(inference_scale, 0.1, 1.0))
+
+    def _target_size(self, height: int, width: int) -> tuple[int, int]:
+        if self.inference_scale >= 0.999:
+            return height, width
+        return (
+            max(64, int(round(height * self.inference_scale))),
+            max(64, int(round(width * self.inference_scale))),
+        )
+
+    def _heuristic_maps_torch(self, frame_linear_t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        luminance = torch.clamp(
+            frame_linear_t[..., 0] * 0.2627 + frame_linear_t[..., 1] * 0.6780 + frame_linear_t[..., 2] * 0.0593,
+            0.0,
+            1.0,
+        )
+        smooth = F.avg_pool2d(luminance[None, None], 11, stride=1, padding=5).squeeze(0).squeeze(0)
+        detail = torch.clamp(luminance - smooth, -0.2, 0.2)
+        expansion = torch.clamp((luminance - 0.55) / 0.45, 0.0, 1.0)
+        local_contrast = torch.clamp(torch.abs(detail) * 6.0, 0.0, 1.0)
+        chroma_spread = torch.amax(frame_linear_t, dim=2) - torch.amin(frame_linear_t, dim=2)
+        protection = torch.clamp(1.0 - chroma_spread * 1.2, 0.0, 1.0)
+        return expansion, local_contrast, protection
+
+    def _run_model(self, tensor: torch.Tensor) -> torch.Tensor:
+        assert F is not None
+        _, _, height, width = tensor.shape
+        target_height, target_width = self._target_size(height, width)
+        if (target_height, target_width) != (height, width):
+            tensor = F.interpolate(
+                tensor,
+                size=(target_height, target_width),
+                mode="bilinear",
+                align_corners=False,
+            )
+        with torch.no_grad():
+            output = self.model(tensor)
+        if tuple(output.shape[-2:]) != (height, width):
+            output = F.interpolate(output, size=(height, width), mode="bilinear", align_corners=False)
+        return output
+
+    def estimate_torch(self, frame_linear_t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        tensor = frame_linear_t.permute(2, 0, 1).unsqueeze(0).to(self.device, dtype=torch.float32)
+        output = self._run_model(tensor).squeeze(0)
+        base_expansion, base_contrast, base_protection = self._heuristic_maps_torch(
+            frame_linear_t.to(self.device, dtype=torch.float32)
+        )
+        expansion = torch.clamp(base_expansion + output[0], 0.0, 1.0)
+        contrast = torch.clamp(base_contrast + output[1], 0.0, 1.0)
+        protection = torch.clamp(base_protection + output[2], 0.0, 1.0)
+        return expansion, contrast, protection
 
     def estimate(self, frame_linear: np.ndarray) -> EnhancementMaps:
-        base = estimate_heuristic_maps(frame_linear)
-        tensor = (
-            torch.from_numpy(frame_linear.transpose(2, 0, 1))
-            .unsqueeze(0)
-            .to(self.device, dtype=torch.float32)
-        )
-        with torch.no_grad():
-            output = self.model(tensor).squeeze(0).cpu().numpy()
-        expansion = np.clip(base.expansion + output[0], 0.0, 1.0)
-        contrast = np.clip(base.contrast + output[1], 0.0, 1.0)
-        protection = np.clip(base.protection + output[2], 0.0, 1.0)
+        tensor = torch.from_numpy(frame_linear).to(self.device, dtype=torch.float32)
+        expansion_t, contrast_t, protection_t = self.estimate_torch(tensor)
         return EnhancementMaps(
-            expansion=expansion,
-            contrast=contrast,
-            protection=protection,
+            expansion=expansion_t.detach().cpu().numpy(),
+            contrast=contrast_t.detach().cpu().numpy(),
+            protection=protection_t.detach().cpu().numpy(),
         )

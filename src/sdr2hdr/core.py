@@ -6,7 +6,7 @@ import platform
 import cv2
 import numpy as np
 
-from sdr2hdr.ai import BaseEnhancer, HeuristicEnhancer
+from sdr2hdr.ai import BaseEnhancer, HeuristicEnhancer, TorchMapEnhancer
 
 try:
     import torch
@@ -537,6 +537,13 @@ class SDRToHDRProcessor:
 
         if isinstance(self.enhancer, HeuristicEnhancer):
             maps_expansion, maps_contrast, maps_protection = self._torch_heuristic_maps(frame_linear_t)
+            skin_mask = self._torch_skin_mask(frame_linear_t)
+        elif isinstance(self.enhancer, TorchMapEnhancer):
+            maps_expansion, maps_contrast, maps_protection = self.enhancer.estimate_torch(frame_linear_t)
+            if maps_expansion.device != frame_linear_t.device:
+                maps_expansion = maps_expansion.to(frame_linear_t.device)
+                maps_contrast = maps_contrast.to(frame_linear_t.device)
+                maps_protection = maps_protection.to(frame_linear_t.device)
             skin_mask = self._torch_skin_mask(frame_linear_t)
         else:
             frame_linear_np = frame_linear_t.detach().cpu().numpy()

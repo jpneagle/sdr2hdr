@@ -20,6 +20,7 @@ from sdr2hdr.app import (
     build_output_path,
     default_encoder_for_platform,
     run_conversion,
+    validate_request,
 )
 
 X265_MODE_OPTIONS = {
@@ -27,6 +28,32 @@ X265_MODE_OPTIONS = {
     "balanced": "Balanced",
     "final": "Final (Best Quality)",
 }
+
+
+def describe_mode_hint(encoder: str, mode: str, backend: str, preset: str, model_path: str) -> str:
+    if encoder == "hevc_videotoolbox":
+        return "Fastest on supported Macs. Falls back to libx265 if VideoToolbox fails."
+    if encoder == "hevc_nvenc":
+        return "Fastest on supported NVIDIA GPUs. Falls back to libx265 if NVENC fails."
+    if mode == "preview":
+        speed = "Fastest x265 mode, lower compression efficiency."
+    elif mode == "final":
+        speed = "Slowest x265 mode, best compression quality."
+    else:
+        speed = "Balanced x265 mode for daily use."
+    if preset == "portrait-ml":
+        if not model_path.strip():
+            return speed + " portrait-ml requires a learned model path."
+        if backend == "cuda":
+            return speed + " Uses NVIDIA GPU for learned-map processing."
+        if backend == "mps":
+            return speed + " Uses Apple GPU for learned-map processing."
+        return speed + " Uses a learned map model."
+    if backend == "mps":
+        return speed + " Uses Apple GPU."
+    if backend == "cuda":
+        return speed + " Uses NVIDIA GPU for processing. Recommended for portrait-ml with a learned model."
+    return speed
 
 def build_encoder_options(system_name: str | None = None) -> dict[str, str]:
     system_name = system_name or platform.system()
@@ -106,6 +133,7 @@ class SDR2HDRGUI:
         self.encoder_var = tk.StringVar(value=self.encoder_options[default_encoder])
         self.x265_mode_var = tk.StringVar(value=X265_MODE_OPTIONS["balanced"])
         self.backend_var = tk.StringVar(value=self.backend_options["auto"])
+        self.model_path_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Idle")
         self.progress_var = tk.StringVar(value="0 frames")
         self.mode_hint_var = tk.StringVar(value="")
@@ -151,7 +179,8 @@ class SDR2HDRGUI:
         self.encoder_combo = self._add_combo_row(form, 3, "Encoder", self.encoder_var, list(self.encoder_options.values()))
         self.x265_combo = self._add_combo_row(form, 4, "Speed/Quality", self.x265_mode_var, list(X265_MODE_OPTIONS.values()))
         self.backend_combo = self._add_combo_row(form, 5, "Backend", self.backend_var, list(self.backend_options.values()))
-        ttk.Label(form, textvariable=self.mode_hint_var).grid(row=6, column=1, sticky="w", pady=(4, 0))
+        self.model_entry = self._add_path_row(form, 6, "Model Path", self.model_path_var, self._browse_model)
+        ttk.Label(form, textvariable=self.mode_hint_var).grid(row=7, column=1, sticky="w", pady=(4, 0))
 
         controls = ttk.Frame(left)
         controls.grid(row=1, column=0, sticky="ew", pady=(16, 12))
@@ -200,6 +229,8 @@ class SDR2HDRGUI:
         self.encoder_var.trace_add("write", self._sync_encoder_ui)
         self.x265_mode_var.trace_add("write", self._sync_mode_hint)
         self.backend_var.trace_add("write", self._sync_mode_hint)
+        self.preset_var.trace_add("write", self._sync_mode_hint)
+        self.model_path_var.trace_add("write", self._sync_mode_hint)
         self._sync_encoder_ui()
         self._sync_mode_hint()
         self._refresh_job_list()
@@ -247,27 +278,15 @@ class SDR2HDRGUI:
         self._sync_mode_hint()
 
     def _sync_mode_hint(self, *_: object) -> None:
-        encoder = self._selected_encoder()
-        mode = self._selected_x265_mode()
-        backend = self._selected_backend()
-        if encoder == "hevc_videotoolbox":
-            self.mode_hint_var.set("Fastest on supported Macs. Falls back to libx265 if VideoToolbox fails.")
-        elif encoder == "hevc_nvenc":
-            self.mode_hint_var.set("Fastest on supported NVIDIA GPUs. Falls back to libx265 if NVENC fails.")
-        else:
-            if mode == "preview":
-                speed = "Fastest x265 mode, lower compression efficiency."
-            elif mode == "final":
-                speed = "Slowest x265 mode, best compression quality."
-            else:
-                speed = "Balanced x265 mode for daily use."
-            if backend == "mps":
-                backend_hint = " Uses Apple GPU."
-            elif backend == "cuda":
-                backend_hint = " Uses NVIDIA GPU for processing. Recommended for portrait-ml with a learned model."
-            else:
-                backend_hint = ""
-            self.mode_hint_var.set(speed + backend_hint)
+        self.mode_hint_var.set(
+            describe_mode_hint(
+                self._selected_encoder(),
+                self._selected_x265_mode(),
+                self._selected_backend(),
+                self.preset_var.get(),
+                self.model_path_var.get(),
+            )
+        )
 
     def _selected_encoder(self) -> str:
         for key, label in self.encoder_options.items():
@@ -302,6 +321,14 @@ class SDR2HDRGUI:
             self.output_var.set(path)
             self.last_output_path = path
 
+    def _browse_model(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Select learned model",
+            filetypes=[("TorchScript model", "*.pt"), ("All files", "*.*")],
+        )
+        if path:
+            self.model_path_var.set(path)
+
     def _log(self, message: str) -> None:
         timestamp = time.strftime("%H:%M:%S")
         self.log.configure(state="normal")
@@ -317,6 +344,8 @@ class SDR2HDRGUI:
             encoder=self._selected_encoder(),
             x265_mode=self._selected_x265_mode(),
             backend=self._selected_backend(),
+            model_path=self.model_path_var.get().strip() or None,
+            device="auto",
             fallback_to_x265_on_hardware_error=True,
             keep_partial_output_on_cancel=True,
         )
@@ -326,6 +355,7 @@ class SDR2HDRGUI:
             raise ValueError("Input path is required.")
         if not request.output_path:
             raise ValueError("Output path is required.")
+        validate_request(request)
 
     def _make_job_label(self, request: ConversionRequest) -> tuple[str, str, str]:
         return ("pending", Path(request.input_path).name, Path(request.output_path).name)
@@ -374,6 +404,8 @@ class SDR2HDRGUI:
                 encoder=self._selected_encoder(),
                 x265_mode=self._selected_x265_mode(),
                 backend=self._selected_backend(),
+                model_path=self.model_path_var.get().strip() or None,
+                device="auto",
                 fallback_to_x265_on_hardware_error=True,
                 keep_partial_output_on_cancel=True,
             )
@@ -473,6 +505,7 @@ class SDR2HDRGUI:
         combo_state = "disabled" if running else "readonly"
         self.input_entry.configure(state=field_state)
         self.output_entry.configure(state=field_state)
+        self.model_entry.configure(state=field_state)
         self.start_button.configure(state="disabled" if running else "normal")
         self.stop_button.configure(state="normal" if running else "disabled")
         self.add_queue_button.configure(state="disabled" if running else "normal")

@@ -136,8 +136,11 @@ The GUI exposes:
 - encoder selection
 - speed / quality selection
 - backend selection
+- model path selection for learned-map runs
 - progress, status, and logs
 - open output / open output folder actions
+
+If you choose `portrait-ml`, the GUI requires a TorchScript model in `Model Path` before queuing or starting a job.
 
 ## CLI
 
@@ -191,6 +194,7 @@ Useful options:
   - keeps the same protection profile as `portrait`
   - defaults to stronger model blending with `ai_strength=0.45`
   - useful when you want the learned maps to show a clearer difference
+  - in the GUI, selecting this preset requires `Model Path`
 
 - `balanced`
   - general-purpose preset
