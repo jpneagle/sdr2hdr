@@ -26,7 +26,7 @@ class GuiTests(unittest.TestCase):
         self.assertIn("Learned-map mode", hint)
 
     def test_format_ai_strength(self) -> None:
-        self.assertEqual(format_ai_strength(0.35), "0.35")
+        self.assertEqual(format_ai_strength(0.2), "0.20")
 
 
 if __name__ == "__main__":

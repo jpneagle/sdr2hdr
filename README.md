@@ -122,7 +122,7 @@ sdr2hdr input.mp4 output_hdr.mp4 \
   --model-path /path/to/enhancement_model_20260308beta.pt
 ```
 
-When `portrait` is used with `--model-path`, the default learned-map strength is `0.35`. In the GUI, you can adjust this with the `AI Strength` slider.
+When `portrait` is used with `--model-path`, the default learned-map strength is `0.20`. In the GUI, you can adjust this with the `AI Strength` slider.
 
 Recommended backends:
 
@@ -209,7 +209,7 @@ Useful options:
   - more conservative highlight expansion
   - stronger white protection
   - fast subtitle mask path
-  - if `--model-path` is supplied, portrait automatically switches to learned-map blending with a default strength of `0.35`
+  - if `--model-path` is supplied, portrait automatically switches to learned-map blending with a default strength of `0.20`
 
 - `balanced`
   - general-purpose preset
@@ -376,7 +376,7 @@ pip install -e .[dev]
 
 - `enhancement_model_20260308beta.pt`
 - ダウンロード: https://github.com/jpneagle/sdr2hdr/releases/tag/model
-- `portrait + --model-path` の既定強度は `0.35`
+- `portrait + --model-path` の既定強度は `0.20`
 - GUI では `AI Strength` スライダーで調整できます
 
 GUI 起動:
@@ -462,7 +462,7 @@ pip install -e .[dev]
 
 - `enhancement_model_20260308beta.pt`
 - 下载地址: https://github.com/jpneagle/sdr2hdr/releases/tag/model
-- `portrait + --model-path` 的默认强度是 `0.35`
+- `portrait + --model-path` 的默认强度是 `0.20`
 - 在 GUI 中可以通过 `AI Strength` 滑块调整
 
 启动 GUI:
