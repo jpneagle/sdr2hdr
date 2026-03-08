@@ -156,6 +156,9 @@ sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_videotoolbox
 # Fast preview on Windows + RTX
 sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_nvenc --backend cuda
 
+# Learned-map run on Windows + RTX
+sdr2hdr input.mp4 output_hdr.mp4 --preset portrait-ml --encoder hevc_nvenc --backend cuda --model-path enhancement_model.pt
+
 # MPS processing + x265 preview export
 sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder libx265 --backend mps --x265-mode preview
 
@@ -168,7 +171,7 @@ sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder libx265 --backend m
 
 Useful options:
 
-- `--preset poc|balanced|high|portrait`
+- `--preset poc|balanced|high|portrait|portrait-ml`
 - `--encoder hevc_videotoolbox|hevc_nvenc|libx265`
 - `--backend auto|mps|cuda|torch-cpu|numpy`
 - `--x265-mode preview|balanced|final`
@@ -182,6 +185,12 @@ Useful options:
   - more conservative highlight expansion
   - stronger white protection
   - fast subtitle mask path
+
+- `portrait-ml`
+  - live-action preset intended for use with `--model-path`
+  - keeps the same protection profile as `portrait`
+  - defaults to stronger model blending with `ai_strength=0.45`
+  - useful when you want the learned maps to show a clearer difference
 
 - `balanced`
   - general-purpose preset
@@ -230,6 +239,21 @@ For Windows + RTX 4090 live-action footage:
   - `encoder=libx265`
   - `backend=cuda`
   - `x265-mode=final`
+
+For Windows + RTX 4090 with a learned map model:
+
+- quickest comparison
+  - `preset=portrait-ml`
+  - `encoder=hevc_nvenc`
+  - `backend=cuda`
+  - `model-path=/path/to/enhancement_model.pt`
+
+- final export
+  - `preset=portrait-ml`
+  - `encoder=libx265`
+  - `backend=cuda`
+  - `x265-mode=balanced` or `final`
+  - `model-path=/path/to/enhancement_model.pt`
 
 For 4K material, slower throughput is expected. At that point, encoding and full-frame processing dominate runtime.
 

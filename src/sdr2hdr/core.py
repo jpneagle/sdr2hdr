@@ -622,7 +622,13 @@ class SDRToHDRProcessor:
         detail_base = self._torch_blur(relit_luma_t, 5)
         detail = relit_luma_t - detail_base
         boosted_luma = torch.clamp(
-            relit_luma_t + detail * (self.config.detail_boost * (1.0 - 0.6 * float(scene_mean_stats[4]))),
+            relit_luma_t
+            + detail
+            * (
+                self.config.detail_boost
+                * (0.35 + 0.65 * maps_contrast)
+                * (1.0 - 0.6 * float(scene_mean_stats[4]))
+            ),
             0.0,
             2.0,
         )
@@ -726,7 +732,7 @@ class SDRToHDRProcessor:
         detail_fn = fast_detail_boost if self.config.fast_mode else bilateral_detail_boost
         boosted_luma = detail_fn(
             relit_luma,
-            self.config.detail_boost * (1.0 - 0.6 * float(np.mean(noise_mask))),
+            (self.config.detail_boost * (0.35 + 0.65 * maps.contrast)) * (1.0 - 0.6 * float(np.mean(noise_mask))),
         )
         relight = boosted_luma / np.maximum(relit_luma, 1e-4)
         frame_linear = np.clip(frame_linear * relight[..., None], 0.0, 4.0)

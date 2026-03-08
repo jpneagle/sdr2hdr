@@ -264,7 +264,7 @@ class SDR2HDRGUI:
             if backend == "mps":
                 backend_hint = " Uses Apple GPU."
             elif backend == "cuda":
-                backend_hint = " Uses NVIDIA GPU for processing."
+                backend_hint = " Uses NVIDIA GPU for processing. Recommended for portrait-ml with a learned model."
             else:
                 backend_hint = ""
             self.mode_hint_var.set(speed + backend_hint)

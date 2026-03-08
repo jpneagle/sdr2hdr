@@ -18,6 +18,23 @@ class EnhancementMaps:
     protection: np.ndarray
 
 
+def estimate_heuristic_maps(frame_linear: np.ndarray) -> EnhancementMaps:
+    luminance = np.clip(
+        0.2627 * frame_linear[..., 0]
+        + 0.6780 * frame_linear[..., 1]
+        + 0.0593 * frame_linear[..., 2],
+        0.0,
+        1.0,
+    )
+    smooth = cv2.GaussianBlur(luminance, (0, 0), 5.0)
+    detail = np.clip(luminance - smooth, -0.2, 0.2)
+    expansion = np.clip((luminance - 0.55) / 0.45, 0.0, 1.0)
+    local_contrast = np.clip(np.abs(detail) * 6.0, 0.0, 1.0)
+    chroma_spread = np.max(frame_linear, axis=2) - np.min(frame_linear, axis=2)
+    protection = np.clip(1.0 - chroma_spread * 1.2, 0.0, 1.0)
+    return EnhancementMaps(expansion=expansion, contrast=local_contrast, protection=protection)
+
+
 class BaseEnhancer:
     def estimate(self, frame_linear: np.ndarray) -> EnhancementMaps:
         raise NotImplementedError
@@ -27,20 +44,7 @@ class HeuristicEnhancer(BaseEnhancer):
     """Fallback enhancer that approximates highlight/detail recovery maps."""
 
     def estimate(self, frame_linear: np.ndarray) -> EnhancementMaps:
-        luminance = np.clip(
-            0.2627 * frame_linear[..., 0]
-            + 0.6780 * frame_linear[..., 1]
-            + 0.0593 * frame_linear[..., 2],
-            0.0,
-            1.0,
-        )
-        smooth = cv2.GaussianBlur(luminance, (0, 0), 5.0)
-        detail = np.clip(luminance - smooth, -0.2, 0.2)
-        expansion = np.clip((luminance - 0.55) / 0.45, 0.0, 1.0)
-        local_contrast = np.clip(np.abs(detail) * 6.0, 0.0, 1.0)
-        chroma_spread = np.max(frame_linear, axis=2) - np.min(frame_linear, axis=2)
-        protection = np.clip(1.0 - chroma_spread * 1.2, 0.0, 1.0)
-        return EnhancementMaps(expansion=expansion, contrast=local_contrast, protection=protection)
+        return estimate_heuristic_maps(frame_linear)
 
 
 class TorchMapEnhancer(BaseEnhancer):
@@ -57,6 +61,7 @@ class TorchMapEnhancer(BaseEnhancer):
         self.model.eval()
 
     def estimate(self, frame_linear: np.ndarray) -> EnhancementMaps:
+        base = estimate_heuristic_maps(frame_linear)
         tensor = (
             torch.from_numpy(frame_linear.transpose(2, 0, 1))
             .unsqueeze(0)
@@ -64,8 +69,11 @@ class TorchMapEnhancer(BaseEnhancer):
         )
         with torch.no_grad():
             output = self.model(tensor).squeeze(0).cpu().numpy()
+        expansion = np.clip(base.expansion + output[0], 0.0, 1.0)
+        contrast = np.clip(base.contrast + output[1], 0.0, 1.0)
+        protection = np.clip(base.protection + output[2], 0.0, 1.0)
         return EnhancementMaps(
-            expansion=np.clip(output[0], 0.0, 1.0),
-            contrast=np.clip(output[1], 0.0, 1.0),
-            protection=np.clip(output[2], 0.0, 1.0),
+            expansion=expansion,
+            contrast=contrast,
+            protection=protection,
         )

@@ -53,6 +53,23 @@ PRESETS = {
         near_white_rolloff_start=0.74,
         near_white_rolloff_strength=0.72,
     ),
+    "portrait-ml": ProcessorConfig(
+        peak_nits=800.0,
+        ai_strength=0.45,
+        detail_boost=0.12,
+        scene_smoothing=0.93,
+        scene_cut_threshold=0.14,
+        highlight_boost=0.72,
+        subtitle_protection=0.90,
+        shadow_noise_floor=0.10,
+        skin_protection=0.82,
+        shadow_rolloff=0.62,
+        processing_scale=0.85,
+        fast_mode=True,
+        clipped_white_protection=0.78,
+        near_white_rolloff_start=0.74,
+        near_white_rolloff_strength=0.72,
+    ),
 }
 
 X265_PROFILE_DEFAULTS = {
