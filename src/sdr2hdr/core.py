@@ -252,6 +252,17 @@ def apply_near_white_rolloff(luma: np.ndarray, start: float, strength: float) ->
     return 1.0 - ramp * strength
 
 
+def limit_ai_highlight_expansion(
+    expansion: np.ndarray,
+    luma: np.ndarray,
+    clipped_white_mask: np.ndarray,
+    rolloff: np.ndarray,
+) -> np.ndarray:
+    near_white = np.clip((luma - 0.7) / 0.25, 0.0, 1.0)
+    suppression = np.clip(clipped_white_mask * 0.85 + near_white * (1.0 - rolloff) * 0.75, 0.0, 0.95)
+    return np.clip(expansion * (1.0 - suppression), 0.0, 1.0)
+
+
 def compute_adaptive_highlight_boost(
     base_boost: float,
     clipped_white_ratio: float,
@@ -421,6 +432,17 @@ class SDRToHDRProcessor:
         )
         return 1.0 - ramp * self.config.near_white_rolloff_strength
 
+    def _torch_limit_ai_highlight_expansion(
+        self,
+        expansion: torch.Tensor,
+        luma_unit: torch.Tensor,
+        clipped_white_mask: torch.Tensor,
+        rolloff: torch.Tensor,
+    ) -> torch.Tensor:
+        near_white = torch.clamp((luma_unit - 0.7) / 0.25, 0.0, 1.0)
+        suppression = torch.clamp(clipped_white_mask * 0.85 + near_white * (1.0 - rolloff) * 0.75, 0.0, 0.95)
+        return torch.clamp(expansion * (1.0 - suppression), 0.0, 1.0)
+
     def _torch_skin_mask(self, frame_linear_t: torch.Tensor) -> torch.Tensor:
         r = frame_linear_t[..., 0]
         g = frame_linear_t[..., 1]
@@ -581,6 +603,12 @@ class SDRToHDRProcessor:
         highlight_mask = torch.clamp(specular_mask * 0.75 + sky_mask * 0.35 + maps_expansion * 0.25, 0.0, 1.0)
         highlight_mask = highlight_mask * (1.0 - clipped_white_mask * self.config.clipped_white_protection)
         rolloff = self._torch_near_white_rolloff(luma_unit)
+        limited_maps_expansion = self._torch_limit_ai_highlight_expansion(
+            maps_expansion,
+            luma_unit,
+            clipped_white_mask,
+            rolloff,
+        )
         protected = torch.clamp(
             self.config.skin_protection * skin_mask
             + 0.25 * maps_protection
@@ -611,7 +639,7 @@ class SDRToHDRProcessor:
         expanded = torch.clamp(frame_linear_t * (1.0 + highlight_mask[..., None] * base_boost * rolloff[..., None]), 0.0, 4.0)
         ai_expanded = torch.clamp(
             frame_linear_t
-            * (1.0 + maps_expansion[..., None] * (scene_boost + 0.4) * rolloff[..., None]),
+            * (1.0 + limited_maps_expansion[..., None] * (scene_boost + 0.4) * rolloff[..., None]),
             0.0,
             4.0,
         )
@@ -700,6 +728,12 @@ class SDRToHDRProcessor:
             self.config.near_white_rolloff_start,
             self.config.near_white_rolloff_strength,
         )
+        limited_maps_expansion = limit_ai_highlight_expansion(
+            maps.expansion,
+            luma_unit,
+            clipped_white_mask,
+            rolloff,
+        )
         protected = np.clip(
             self.config.skin_protection * skin_mask
             + 0.25 * maps.protection
@@ -721,7 +755,7 @@ class SDRToHDRProcessor:
         expanded = np.clip(frame_linear * (1.0 + highlight_mask[..., None] * base_boost * rolloff[..., None]), 0.0, 4.0)
         ai_expanded = np.clip(
             frame_linear
-            * (1.0 + maps.expansion[..., None] * (scene_boost + 0.4) * rolloff[..., None]),
+            * (1.0 + limited_maps_expansion[..., None] * (scene_boost + 0.4) * rolloff[..., None]),
             0.0,
             4.0,
         )

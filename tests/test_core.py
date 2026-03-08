@@ -18,6 +18,7 @@ from sdr2hdr.core import (
     estimate_skin_mask,
     estimate_specular_mask,
     estimate_subtitle_mask,
+    limit_ai_highlight_expansion,
     linear_to_pq,
     srgb_to_linear,
 )
@@ -100,6 +101,16 @@ class CoreTests(unittest.TestCase):
         rolloff = apply_near_white_rolloff(luma, 0.78, 0.6)
         self.assertAlmostEqual(float(rolloff[0, 0]), 1.0)
         self.assertGreater(float(rolloff[0, 1]), float(rolloff[0, 2]))
+
+    def test_ai_highlight_limiter_suppresses_clipped_and_near_white_regions(self) -> None:
+        expansion = np.ones((1, 3), dtype=np.float32)
+        luma = np.array([[0.55, 0.86, 0.98]], dtype=np.float32)
+        clipped_white = np.array([[0.0, 0.15, 1.0]], dtype=np.float32)
+        rolloff = apply_near_white_rolloff(luma, 0.74, 0.72)
+        limited = limit_ai_highlight_expansion(expansion, luma, clipped_white, rolloff)
+        self.assertAlmostEqual(float(limited[0, 0]), 1.0)
+        self.assertLess(float(limited[0, 1]), 0.8)
+        self.assertLess(float(limited[0, 2]), 0.2)
 
     def test_adaptive_highlight_boost_penalizes_flat_white_scenes(self) -> None:
         flat_white = compute_adaptive_highlight_boost(0.8, 0.8, 0.1, 0.05, 0.1, 0.55, 1.05)
