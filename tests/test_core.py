@@ -12,8 +12,11 @@ from sdr2hdr.core import (
     SDRToHDRProcessor,
     TemporalState,
     apply_near_white_rolloff,
+    build_ai_gate,
     compute_adaptive_highlight_boost,
     estimate_clipped_white_mask,
+    estimate_high_chroma_mask,
+    estimate_memory_color_mask,
     estimate_noise_mask,
     estimate_skin_mask,
     estimate_specular_mask,
@@ -95,6 +98,31 @@ class CoreTests(unittest.TestCase):
         luma[:, 4:] = 0.70
         mask = estimate_clipped_white_mask(frame, luma)
         self.assertGreater(float(mask[:, :4].mean()), float(mask[:, 4:].mean()))
+
+    def test_high_chroma_mask_prefers_vivid_regions(self) -> None:
+        frame = np.array([[[0.9, 0.1, 0.1], [0.4, 0.38, 0.36]]], dtype=np.float32)
+        luma = np.array([[0.4, 0.4]], dtype=np.float32)
+        mask = estimate_high_chroma_mask(frame, luma)
+        self.assertGreater(float(mask[0, 0]), float(mask[0, 1]))
+
+    def test_memory_color_mask_catches_foliage_like_green(self) -> None:
+        frame = np.array([[[0.18, 0.55, 0.12], [0.35, 0.35, 0.35]]], dtype=np.float32)
+        luma = np.array([[0.35, 0.35]], dtype=np.float32)
+        mask = estimate_memory_color_mask(frame, luma)
+        self.assertGreater(float(mask[0, 0]), float(mask[0, 1]))
+
+    def test_ai_gate_suppresses_protected_color_regions(self) -> None:
+        gate = build_ai_gate(
+            skin_mask=np.array([[0.0, 0.0]], dtype=np.float32),
+            subtitle_mask=np.array([[0.0, 0.0]], dtype=np.float32),
+            noise_mask=np.array([[0.0, 0.0]], dtype=np.float32),
+            clipped_white_mask=np.array([[0.0, 0.0]], dtype=np.float32),
+            high_chroma_mask=np.array([[0.9, 0.0]], dtype=np.float32),
+            memory_color_mask=np.array([[0.0, 0.0]], dtype=np.float32),
+            learned_protection=np.array([[0.0, 0.0]], dtype=np.float32),
+        )
+        self.assertLess(float(gate[0, 0]), 0.5)
+        self.assertAlmostEqual(float(gate[0, 1]), 1.0)
 
     def test_near_white_rolloff_reduces_upper_luma_gain(self) -> None:
         luma = np.array([[0.4, 0.8, 0.95]], dtype=np.float32)

@@ -9,7 +9,10 @@ import numpy as np
 
 from sdr2hdr.ai import estimate_heuristic_maps
 from sdr2hdr.core import (
+    build_ai_gate,
     estimate_clipped_white_mask,
+    estimate_high_chroma_mask,
+    estimate_memory_color_mask,
     estimate_noise_mask,
     estimate_skin_mask,
     estimate_subtitle_mask,
@@ -59,6 +62,8 @@ def derive_target_maps(sdr_linear: np.ndarray, hdr_linear: np.ndarray) -> Target
     skin_target = estimate_skin_mask(hdr_linear)
     clipped_white = estimate_clipped_white_mask(hdr_linear, np.clip(luma_hdr, 0.0, 1.0))
     noise_target = estimate_noise_mask(np.clip(luma_sdr, 0.0, 1.0), 0.08)
+    high_chroma_target = estimate_high_chroma_mask(hdr_linear, np.clip(luma_hdr, 0.0, 1.0))
+    memory_color_target = estimate_memory_color_mask(hdr_linear, np.clip(luma_hdr, 0.0, 1.0))
     sdr_rgb8 = np.clip(np.round(linear_to_srgb(sdr_linear) * 255.0), 0, 255).astype(np.uint8)
     subtitle_target = estimate_subtitle_mask(sdr_rgb8[..., ::-1], np.clip(luma_sdr, 0.0, 1.0))
     protection_abs = np.maximum.reduce(
@@ -67,12 +72,25 @@ def derive_target_maps(sdr_linear: np.ndarray, hdr_linear: np.ndarray) -> Target
             skin_target,
             subtitle_target,
             noise_target,
+            high_chroma_target * 0.85,
+            memory_color_target,
             clipped_white * 0.9,
         ]
     ).astype(np.float32)
     expansion = np.clip(expansion_abs - base_maps.expansion, -1.0, 1.0)
     contrast = np.clip(contrast_abs - base_maps.contrast, -1.0, 1.0)
     protection = np.clip(protection_abs - base_maps.protection, -1.0, 1.0)
+    ai_gate = build_ai_gate(
+        skin_target,
+        subtitle_target,
+        noise_target,
+        clipped_white,
+        high_chroma_target,
+        memory_color_target,
+        protection_abs,
+    )
+    expansion *= ai_gate
+    contrast *= np.clip(ai_gate + 0.15, 0.0, 1.0)
     return TargetMaps(expansion=expansion, contrast=contrast, protection=protection, clip_mask=clip_mask)
 
 

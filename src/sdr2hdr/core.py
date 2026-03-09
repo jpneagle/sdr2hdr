@@ -235,6 +235,52 @@ def estimate_sky_mask(frame_linear: np.ndarray) -> np.ndarray:
     return blue.astype(np.float32) * hue_strength * vertical
 
 
+def estimate_high_chroma_mask(frame_linear: np.ndarray, luma: np.ndarray) -> np.ndarray:
+    chroma = compute_chroma(frame_linear)
+    saturation = chroma / np.maximum(np.max(frame_linear, axis=2), 1e-4)
+    midtone = 1.0 - np.clip(np.abs(luma - 0.45) / 0.45, 0.0, 1.0)
+    vivid = np.clip((saturation - 0.18) / 0.42, 0.0, 1.0)
+    return np.clip(vivid * (0.35 + 0.65 * midtone), 0.0, 1.0)
+
+
+def estimate_memory_color_mask(frame_linear: np.ndarray, luma: np.ndarray) -> np.ndarray:
+    r = frame_linear[..., 0]
+    g = frame_linear[..., 1]
+    b = frame_linear[..., 2]
+    sum_rgb = np.maximum(r + g + b, 1e-6)
+    rn = r / sum_rgb
+    gn = g / sum_rgb
+    bn = b / sum_rgb
+    foliage = ((gn > rn) & (gn > bn) & (gn > 0.34)).astype(np.float32) * np.clip((gn - bn) * 3.2, 0.0, 1.0)
+    warm = ((rn > gn) & (gn > bn) & (rn > 0.38)).astype(np.float32) * np.clip((rn - bn) * 2.8, 0.0, 1.0)
+    cyan_blue = ((bn > rn) & (bn > 0.32)).astype(np.float32) * np.clip((bn - rn) * 3.0, 0.0, 1.0)
+    valid_luma = np.clip((luma - 0.08) / 0.22, 0.0, 1.0) * (1.0 - np.clip((luma - 0.92) / 0.08, 0.0, 1.0))
+    return np.clip(np.maximum.reduce([foliage, warm, cyan_blue]) * valid_luma, 0.0, 1.0)
+
+
+def build_ai_gate(
+    skin_mask: np.ndarray,
+    subtitle_mask: np.ndarray,
+    noise_mask: np.ndarray,
+    clipped_white_mask: np.ndarray,
+    high_chroma_mask: np.ndarray,
+    memory_color_mask: np.ndarray,
+    learned_protection: np.ndarray,
+) -> np.ndarray:
+    suppression = np.maximum.reduce(
+        [
+            skin_mask * 0.95,
+            subtitle_mask,
+            noise_mask * 0.65,
+            clipped_white_mask * 0.95,
+            high_chroma_mask * 0.75,
+            memory_color_mask * 0.85,
+            learned_protection * 0.60,
+        ]
+    )
+    return np.clip(1.0 - suppression, 0.0, 1.0)
+
+
 def estimate_clipped_white_mask(frame_linear: np.ndarray, luma: np.ndarray, detail_base: np.ndarray | None = None) -> np.ndarray:
     chroma = compute_chroma(frame_linear)
     detail_base = detail_base if detail_base is not None else cv2.GaussianBlur(np.clip(luma, 0.0, 1.0).astype(np.float32), (0, 0), 1.4)
@@ -421,6 +467,29 @@ class SDRToHDRProcessor:
         flat = 1.0 - torch.clamp(detail / 0.035, 0.0, 1.0)
         return torch.clamp(bright * (0.5 + 0.5 * neutral) * flat, 0.0, 1.0)
 
+    def _torch_high_chroma_mask(self, frame_linear_t: torch.Tensor, luma_unit: torch.Tensor) -> torch.Tensor:
+        chroma = self._torch_compute_chroma(frame_linear_t)
+        saturation = chroma / torch.clamp(torch.amax(frame_linear_t, dim=2), min=1e-4)
+        midtone = 1.0 - torch.clamp(torch.abs(luma_unit - 0.45) / 0.45, 0.0, 1.0)
+        vivid = torch.clamp((saturation - 0.18) / 0.42, 0.0, 1.0)
+        return torch.clamp(vivid * (0.35 + 0.65 * midtone), 0.0, 1.0)
+
+    def _torch_memory_color_mask(self, frame_linear_t: torch.Tensor, luma_unit: torch.Tensor) -> torch.Tensor:
+        r = frame_linear_t[..., 0]
+        g = frame_linear_t[..., 1]
+        b = frame_linear_t[..., 2]
+        sum_rgb = torch.clamp(r + g + b, min=1e-6)
+        rn = r / sum_rgb
+        gn = g / sum_rgb
+        bn = b / sum_rgb
+        foliage = ((gn > rn) & (gn > bn) & (gn > 0.34)).to(torch.float32) * torch.clamp((gn - bn) * 3.2, 0.0, 1.0)
+        warm = ((rn > gn) & (gn > bn) & (rn > 0.38)).to(torch.float32) * torch.clamp((rn - bn) * 2.8, 0.0, 1.0)
+        cyan_blue = ((bn > rn) & (bn > 0.32)).to(torch.float32) * torch.clamp((bn - rn) * 3.0, 0.0, 1.0)
+        valid_luma = torch.clamp((luma_unit - 0.08) / 0.22, 0.0, 1.0) * (
+            1.0 - torch.clamp((luma_unit - 0.92) / 0.08, 0.0, 1.0)
+        )
+        return torch.clamp(torch.maximum(torch.maximum(foliage, warm), cyan_blue) * valid_luma, 0.0, 1.0)
+
     def _torch_near_white_rolloff(self, luma_unit: torch.Tensor) -> torch.Tensor:
         if self.config.near_white_rolloff_strength <= 0.0:
             return torch.ones_like(luma_unit)
@@ -600,6 +669,8 @@ class SDRToHDRProcessor:
         vertical = self._get_sky_gradient(frame_linear_t.shape[0])
         sky_mask = blue * hue_strength * vertical
         clipped_white_mask = self._torch_clipped_white_mask(frame_linear_t, luma_unit, detail_base=blur_t)
+        high_chroma_mask = self._torch_high_chroma_mask(frame_linear_t, luma_unit)
+        memory_color_mask = self._torch_memory_color_mask(frame_linear_t, luma_unit)
         highlight_mask = torch.clamp(specular_mask * 0.75 + sky_mask * 0.35 + maps_expansion * 0.25, 0.0, 1.0)
         highlight_mask = highlight_mask * (1.0 - clipped_white_mask * self.config.clipped_white_protection)
         rolloff = self._torch_near_white_rolloff(luma_unit)
@@ -609,6 +680,22 @@ class SDRToHDRProcessor:
             clipped_white_mask,
             rolloff,
         )
+        ai_gate = torch.clamp(
+            1.0
+            - torch.maximum(
+                torch.maximum(skin_mask * 0.95, subtitle_mask),
+                torch.maximum(
+                    torch.maximum(noise_mask * 0.65, clipped_white_mask * 0.95),
+                    torch.maximum(
+                        torch.maximum(high_chroma_mask * 0.75, memory_color_mask * 0.85),
+                        maps_protection * 0.60,
+                    ),
+                ),
+            ),
+            0.0,
+            1.0,
+        )
+        limited_maps_expansion = limited_maps_expansion * ai_gate
         protected = torch.clamp(
             self.config.skin_protection * skin_mask
             + 0.25 * maps_protection
@@ -661,7 +748,7 @@ class SDRToHDRProcessor:
             + detail
             * (
                 self.config.detail_boost
-                * (0.35 + 0.65 * maps_contrast)
+                * (0.35 + 0.65 * maps_contrast * ai_gate)
                 * (1.0 - 0.6 * float(scene_mean_stats[4]))
             ),
             0.0,
@@ -721,6 +808,8 @@ class SDRToHDRProcessor:
         specular_mask = estimate_specular_mask(frame_linear, luma_unit)
         sky_mask = estimate_sky_mask(frame_linear)
         clipped_white_mask = estimate_clipped_white_mask(frame_linear, luma_unit, detail_base=blur_luma)
+        high_chroma_mask = estimate_high_chroma_mask(frame_linear, luma_unit)
+        memory_color_mask = estimate_memory_color_mask(frame_linear, luma_unit)
         highlight_mask = np.clip(specular_mask * 0.75 + sky_mask * 0.35 + maps.expansion * 0.25, 0.0, 1.0)
         highlight_mask = highlight_mask * (1.0 - clipped_white_mask * self.config.clipped_white_protection)
         rolloff = apply_near_white_rolloff(
@@ -734,6 +823,16 @@ class SDRToHDRProcessor:
             clipped_white_mask,
             rolloff,
         )
+        ai_gate = build_ai_gate(
+            skin_mask,
+            subtitle_mask,
+            noise_mask,
+            clipped_white_mask,
+            high_chroma_mask,
+            memory_color_mask,
+            maps.protection,
+        )
+        limited_maps_expansion = limited_maps_expansion * ai_gate
         protected = np.clip(
             self.config.skin_protection * skin_mask
             + 0.25 * maps.protection
@@ -773,7 +872,8 @@ class SDRToHDRProcessor:
         detail_fn = fast_detail_boost if self.config.fast_mode else bilateral_detail_boost
         boosted_luma = detail_fn(
             relit_luma,
-            (self.config.detail_boost * (0.35 + 0.65 * maps.contrast)) * (1.0 - 0.6 * float(np.mean(noise_mask))),
+            (self.config.detail_boost * (0.35 + 0.65 * maps.contrast * ai_gate))
+            * (1.0 - 0.6 * float(np.mean(noise_mask))),
         )
         relight = boosted_luma / np.maximum(relit_luma, 1e-4)
         frame_linear = np.clip(frame_linear * relight[..., None], 0.0, 4.0)

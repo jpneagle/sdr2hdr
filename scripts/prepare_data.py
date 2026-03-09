@@ -59,7 +59,11 @@ def convert_frame_to_npz(hdr_frame_path: Path, output_path: Path, peak_nits: flo
     hdr_2020_linear = pq_to_relative_linear(hdr_rgb16.astype(np.float32) / 65535.0, peak_nits=peak_nits)
     hdr_709_linear = np.clip(np.tensordot(hdr_2020_linear, REC2020_TO_REC709.T, axes=1), 0.0, 1.5)
     sdr_linear = tone_map_hdr_linear_to_sdr_linear(hdr_709_linear)
-    np.savez_compressed(output_path, sdr_linear=sdr_linear.astype(np.float32), hdr_linear=hdr_709_linear.astype(np.float32))
+    np.savez_compressed(
+        output_path,
+        sdr_linear=sdr_linear.astype(np.float16),
+        hdr_linear=hdr_709_linear.astype(np.float16),
+    )
 
 
 def main() -> int:

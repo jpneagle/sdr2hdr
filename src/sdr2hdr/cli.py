@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Convert SDR video into HDR10 HEVC output.")
     parser.add_argument("input", help="Input SDR video path")
     parser.add_argument("output", help="Output HDR10 video path")
-    parser.add_argument("--preset", choices=sorted(PRESETS), default="high")
+    parser.add_argument("--preset", choices=sorted(PRESETS), default="portrait")
     parser.add_argument("--peak-nits", type=float, default=None, help="Target HDR10 peak luminance")
     parser.add_argument("--ai-strength", type=float, default=None, help="Blend factor for enhancement maps")
     parser.add_argument("--highlight-boost", type=float, default=None, help="Base highlight expansion strength")

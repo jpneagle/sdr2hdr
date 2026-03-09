@@ -40,6 +40,13 @@ class ModelDatasetTests(unittest.TestCase):
         self.assertTrue(np.all(targets.protection >= -1.0))
         self.assertTrue(np.all(targets.protection <= 1.0))
 
+    def test_derive_target_maps_reduces_expansion_for_vivid_memory_colors(self) -> None:
+        sdr = np.full((16, 16, 3), [0.18, 0.55, 0.12], dtype=np.float32)
+        hdr = np.full((16, 16, 3), [0.35, 0.75, 0.22], dtype=np.float32)
+        targets = derive_target_maps(sdr, hdr)
+        self.assertGreater(float(targets.protection.mean()), 0.0)
+        self.assertLess(float(targets.expansion.mean()), 0.25)
+
     def test_dataset_loads_npz_and_returns_tensors(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             sample_path = Path(temp_dir) / "sample.npz"

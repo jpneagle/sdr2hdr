@@ -122,7 +122,7 @@ def build_output_path(input_path: str) -> str:
 def build_request_config(request: ConversionRequest) -> tuple[ProcessorConfig, str, int]:
     config = replace(PRESETS[request.preset])
     if request.preset == "portrait" and request.model_path and request.ai_strength is None:
-        config.ai_strength = 0.2
+        config.ai_strength = 0.25
     if request.peak_nits is not None:
         config.peak_nits = request.peak_nits
     if request.ai_strength is not None:

@@ -15,7 +15,7 @@ The project is aimed at practical up-conversion on macOS and Windows, with a GUI
 - Converts SDR `BT.709` video to HDR10-compatible `HEVC Main10`
 - Automatically deinterlaces interlaced inputs such as broadcast-style `m2ts` before HDR processing
 - Preserves midtones and expands highlights instead of simply stretching the whole image
-- Protects skin, subtitles, dark noisy areas, and clipped white regions
+- Protects skin, subtitles, dark noisy areas, clipped white regions, and vivid or memory-color regions
 - Applies scene-aware highlight control to reduce white blowout on difficult footage
 - Supports Apple Silicon acceleration with `MPS`
 - Supports NVIDIA acceleration with `CUDA`
@@ -122,7 +122,7 @@ sdr2hdr input.mp4 output_hdr.mp4 \
   --model-path /path/to/enhancement_model_20260308beta.pt
 ```
 
-When `portrait` is used with `--model-path`, the default learned-map strength is `0.20`. In the GUI, you can adjust this with the `AI Strength` slider.
+When `portrait` is used with `--model-path`, the default learned-map strength is `0.25`. In the GUI, you can adjust this with the `AI Strength` slider.
 
 Recommended backends:
 
@@ -209,7 +209,7 @@ Useful options:
   - more conservative highlight expansion
   - stronger white protection
   - fast subtitle mask path
-  - if `--model-path` is supplied, portrait automatically switches to learned-map blending with a default strength of `0.20`
+- if `--model-path` is supplied, portrait automatically switches to learned-map blending with a default strength of `0.25`
 
 - `balanced`
   - general-purpose preset
@@ -285,6 +285,7 @@ The converter currently includes:
 - scene cut detection
 - adaptive scene-level highlight boost
 - skin protection
+- high-chroma / memory-color protection
 - subtitle / burned-in text protection
 - dark noise suppression
 - specular / sky / clipped-white analysis
@@ -300,6 +301,24 @@ The processing path has been optimized for Apple Silicon:
 - lighter subtitle mask in `fast_mode`
 
 The processing path also supports NVIDIA-backed processing on Windows when `torch` has CUDA support.
+
+## Training
+
+The learned-map model is trained from HDR videos that are converted into SDR/HDR linear frame pairs.
+
+Recommended workflow:
+
+```bash
+python scripts/prepare_data.py --input-dir /path/to/hdr_videos --out-dir /path/to/train_npz --sample-every 96
+python scripts/train.py --data-dir /path/to/train_npz --output-dir /path/to/train_out --device cuda
+python scripts/export_model.py --checkpoint /path/to/train_out/best.pt --output /path/to/train_out/enhancement_model.pt --device cuda
+```
+
+Notes:
+
+- `prepare_data.py` now stores the generated `sdr_linear` and `hdr_linear` arrays as `float16` to reduce dataset size while keeping training-time tensors in `float32`
+- for mixed-density datasets, a practical pattern is `sample_every=96` globally and `48` only for a small set of priority clips
+- keep a hold-out video outside the training set for manual evaluation
 
 ## HDR Metadata Handling
 
@@ -320,6 +339,10 @@ ffprobe -v error -select_streams v:0 \
   -show_entries stream=codec_name,pix_fmt,color_space,color_transfer,color_primaries \
   -of json output_hdr.mp4
 ```
+
+## License
+
+This project is licensed under the MIT License.
 
 ## Review Tools
 
@@ -376,7 +399,7 @@ pip install -e .[dev]
 
 - `enhancement_model_20260308beta.pt`
 - ダウンロード: https://github.com/jpneagle/sdr2hdr/releases/tag/model
-- `portrait + --model-path` の既定強度は `0.20`
+- `portrait + --model-path` の既定強度は `0.25`
 - GUI では `AI Strength` スライダーで調整できます
 
 GUI 起動:
@@ -462,7 +485,7 @@ pip install -e .[dev]
 
 - `enhancement_model_20260308beta.pt`
 - 下载地址: https://github.com/jpneagle/sdr2hdr/releases/tag/model
-- `portrait + --model-path` 的默认强度是 `0.20`
+- `portrait + --model-path` 的默认强度是 `0.25`
 - 在 GUI 中可以通过 `AI Strength` 滑块调整
 
 启动 GUI:
