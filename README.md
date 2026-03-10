@@ -1,562 +1,174 @@
 # sdr2hdr
 
-- [English](#english)
-- [日本語](#日本語)
-- [中文](#中文)
+SDR 動画を HDR10 向けに変換する Python ツールです。GUI と CLI の両方を備えています。
 
-## English
+現行版は `AI model 前提` の運用です。変換時には学習済み TorchScript モデル (`.pt`) を指定するか、GUI の `models/` プルダウンから選択する必要があります。
 
-`sdr2hdr` is an AI-enhanced offline SDR-to-HDR10 converter for real-world video.
+## Overview
 
-The project is aimed at practical up-conversion on macOS and Windows, with a GUI-first workflow and a CLI for batch or scripted use. Its core pipeline combines rule-based HDR reconstruction with learned enhancement maps trained from HDR/SDR pairs, so the output stays natural while still gaining scene-aware highlight and detail recovery.
+- 入力は通常の SDR 動画です。
+- 出力は HDR10 メタデータ付きの動画です。
+- GUI は queue 実行に対応しています。
+- AI モデルは `models/` フォルダ内の `.pt` ファイルを使用します。
 
-## What It Does
+## Requirements
 
-- Converts SDR `BT.709` video to HDR10-compatible `HEVC Main10`
-- Automatically deinterlaces interlaced inputs such as broadcast-style `m2ts` before HDR processing
-- Preserves midtones and expands highlights instead of simply stretching the whole image
-- Protects skin, subtitles, dark noisy areas, clipped white regions, and vivid or memory-color regions
-- Applies scene-aware highlight control to reduce white blowout on difficult footage
-- Supports Apple Silicon acceleration with `MPS`
-- Supports NVIDIA acceleration with `CUDA`
-- Supports fast macOS encoding with `VideoToolbox`
-- Supports fast Windows encoding with `HEVC NVENC`
-- Falls back to `libx265` when hardware encoding is unavailable
-- Verifies HDR metadata after export and repairs tags automatically if needed
+- Python
+- `ffmpeg` と `ffprobe` が実行可能であること
+- PyTorch を含む依存関係
 
-## Current Focus
+OS ごとの backend は次の通りです。
 
-This project is currently tuned for:
+- Windows: `Auto`, `CUDA`, `CPU / NumPy`
+- macOS: `Auto`, `MPS`, `CPU / NumPy`
+- その他: `Auto`, `CPU / NumPy`
 
-- live-action footage
-- offline conversion
-- macOS, especially M-series Macs
-- Windows systems with NVIDIA RTX GPUs
+`Auto` は使える環境で GPU backend を優先し、使えない場合は CPU 側へ寄せます。
 
-It is not designed around:
+## Setup
 
-- animation-specific grading
-- RAW / Log workflows
-- Dolby Vision or HLG output
+依存関係をインストールし、学習済みモデルを `models/` に置きます。
 
-## Installation
-
-### Prerequisites
-
-Required:
-
-- `Python 3.11+`
-- `ffmpeg`
-- `ffprobe`
-
-Recommended:
-
-- `torch`
-  - for `MPS` on Apple Silicon
-  - for `CUDA` on Windows + NVIDIA
-
-Hardware-accelerated encoding also depends on your FFmpeg build:
-
-- `hevc_videotoolbox` requires a macOS FFmpeg build with VideoToolbox support
-- `hevc_nvenc` requires a Windows FFmpeg build with NVENC support
-
-Quick checks:
-
-```bash
-python3 --version
-ffmpeg -version
-ffprobe -version
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -e .
 ```
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
+モデル配置例:
+
+```text
+models/
+  enhancement_model_20260310.pt
 ```
 
-### GPU acceleration (strongly recommended)
+## Quick Start
 
-`torch` is an optional dependency, but without it the pipeline runs on CPU (numpy path) and will be very slow.
+### GUI
 
-**Windows + NVIDIA GPU (CUDA)**
-
-`pip install torch` from PyPI installs a CPU-only build. You must install the CUDA-enabled build explicitly:
-
-```bash
-# CUDA 12.6 wheels work with driver-reported CUDA 12.x and 13.x
-pip install torch --index-url https://download.pytorch.org/whl/cu126
+```powershell
+python -m sdr2hdr.gui
 ```
 
-Verify that CUDA is available after installation:
+GUI の基本動作:
 
-```bash
-python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
+- `Input` と `Output` を指定
+- `Preset` は既定で `portrait`
+- `AI Model` で `models/` 内の `.pt` を選択
+- `AI Strength` は既定で `0.25`
+- `Add To Queue` または `Add Files` で queue へ追加
+- `Start Queue` で順次変換
+
+### CLI
+
+```powershell
+python -m sdr2hdr.cli input.mp4 output_hdr.mp4 --model-path models\enhancement_model_20260310.pt
 ```
 
-Both lines should print `True` and your GPU name. Once confirmed, set `--backend cuda` (or leave `--backend auto`) and restart the app.
+`output_path` を省略した場合は、入力ファイル名の末尾に `_hdr` を付けた名前が自動生成されます。
 
-**macOS (Apple Silicon)**
-
-```bash
-pip install torch
+```powershell
+python -m sdr2hdr.cli input.mp4 --model-path models\enhancement_model_20260310.pt
 ```
-
-The default PyPI build includes MPS support. No extra index URL is needed.
-
-**CPU-only fallback**
-
-If you skip `torch` entirely, the numpy path is used automatically. Expect roughly 0.3 FPS on full-HD frames — suitable only for quick tests.
-
-## Model Download
-
-Pretrained learned-map model:
-
-- `enhancement_model_20260308beta.pt`
-- Release page: https://github.com/jpneagle/sdr2hdr/releases/tag/model
-
-Recommended usage:
-
-```bash
-sdr2hdr input.mp4 output_hdr.mp4 \
-  --preset portrait \
-  --model-path /path/to/enhancement_model_20260308beta.pt
-```
-
-When `portrait` is used with `--model-path`, the default learned-map strength is `0.25`. In the GUI, you can adjust this with the `AI Strength` slider.
-
-Recommended backends:
-
-- macOS: `mps`
-- Windows + NVIDIA: `cuda`
 
 ## GUI
 
-Launch the app with:
+### Main Controls
 
-```bash
-sdr2hdr
-```
+- `Preset`
+  - 既定値は `portrait`
+- `Encoder`
+  - 環境に応じて `libx265`、`NVENC`、`VideoToolbox` を選択
+- `Speed/Quality`
+  - `Preview`, `Balanced`, `Final`
+- `Backend`
+  - OS ごとの対応 backend から選択
+- `AI Model`
+  - `models/` 直下の `.pt` をプルダウン表示
+- `Refresh`
+  - `models/` を再スキャン
+- `AI Strength`
+  - 既定値は `0.25`
 
-Current behavior:
+### Queue
 
-- `sdr2hdr` with no arguments launches the GUI
-- on macOS, the GUI defaults to `VideoToolbox` as the encoder
-- on Windows, the GUI defaults to `NVENC` as the encoder
-- if hardware encoding fails, the GUI falls back to `libx265`
-- multiple jobs can be queued and processed one by one
-- pressing `Stop` keeps a playable partial output when frames have already been written
-- transport-stream inputs such as `m2ts` default to `*_hdr.mp4` outputs
+GUI は複数ジョブの queue 実行に対応しています。
 
-The GUI exposes:
+- `Add To Queue`
+  - 現在の入力設定を queue に追加
+- `Add Files`
+  - 複数ファイルをまとめて queue に追加
+- `Remove Selected`
+  - 選択中の queue 項目を削除
+- `Clear Queue`
+  - queue を全削除
+- `Start Queue`
+  - queue を順次処理
+- `Stop Current`
+  - 実行中ジョブの停止を要求
 
-- input / output path selection
-- add current job to queue
-- add multiple input files to queue
-- remove / clear queued jobs
-- sequential queue execution
-- preset selection
-- encoder selection
-- speed / quality selection
-- backend selection
-- optional model path selection for learned-map runs
-- AI strength slider for learned-map runs
-- progress, status, and logs
-- open output / open output folder actions
+### Queue Status
+
+Queue の status 表示は現在次の 7 種類です。
+
+- `QUEUED`
+- `STARTING`
+- `RUNNING`
+- `CANCELLING`
+- `OK`
+- `FAILED`
+- `CANCELLED`
+
+`Stop Current` を押した場合は、まず `CANCELLING` になり、終了時に `CANCELLED` へ確定します。
+
+### Cancel Behavior
+
+- キャンセル時は partial output を保持する前提です。
+- GUI の進捗欄には `partial output saved` と表示されます。
 
 ## CLI
 
-CLI conversion still works as before:
+現行 CLI の基本仕様:
 
-```bash
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait
+- `input_path` は必須
+- `output_path` は省略可能
+- `--model-path` は必須
+- `--model-path` は `.pt` モデルを指定
+- `--preset` の既定値は `portrait`
+- `--backend` は `auto`, `numpy`, `cuda`, `mps`
+- `--ai-strength` の既定値は `0.25`
+
+例:
+
+```powershell
+python -m sdr2hdr.cli input.mp4 output_hdr.mp4 `
+  --preset portrait `
+  --backend auto `
+  --encoder libx265 `
+  --x265-mode balanced `
+  --model-path models\enhancement_model_20260310.pt `
+  --ai-strength 0.25
 ```
 
-Common examples:
+## Models
 
-```bash
-# Fast preview on Apple Silicon
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_videotoolbox
+- GUI は `models/` フォルダを参照します。
+- 読み込むのは `.pt` ファイルのみです。
+- モデル未配置時は GUI のプルダウンに有効候補が出ません。
+- CLI では `--model-path` に明示指定します。
 
-# Fast preview on Windows + RTX
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_nvenc --backend cuda
+推奨:
 
-# Learned-map run on Windows + RTX
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_nvenc --backend cuda --model-path enhancement_model.pt
+- 配布用・運用用モデルは `models/` にまとめる
+- ファイル名で日付やバージョンを区別する
 
-# MPS processing + x265 preview export
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder libx265 --backend mps --x265-mode preview
+## Notes
 
-# Balanced export
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder libx265 --backend mps --x265-mode balanced
-
-# Final export
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder libx265 --backend mps --x265-mode final
-```
-
-Useful options:
-
-- `--preset poc|balanced|high|portrait`
-- `--encoder hevc_videotoolbox|hevc_nvenc|libx265`
-- `--backend auto|mps|cuda|torch-cpu|numpy`
-- `--x265-mode preview|balanced|final`
-- `--max-frames N`
-
-## Presets
-
-- `portrait`
-  - recommended default for live-action footage
-  - stronger skin protection
-  - more conservative highlight expansion
-  - stronger white protection
-  - fast subtitle mask path
-- if `--model-path` is supplied, portrait automatically switches to learned-map blending with a default strength of `0.25`
-
-- `balanced`
-  - general-purpose preset
-  - now uses the faster detail path for better CPU-side performance
-
-- `high`
-  - more aggressive quality-oriented settings
-
-- `poc`
-  - lightweight preset for fast tests
-
-## Recommended Settings
-
-For Apple Silicon live-action footage:
-
-- quickest turnaround
-  - `preset=portrait`
-  - `encoder=hevc_videotoolbox`
-
-- daily use
-  - `preset=portrait`
-  - `encoder=libx265`
-  - `backend=mps`
-  - `x265-mode=balanced`
-
-- final export
-  - `preset=portrait`
-  - `encoder=libx265`
-  - `backend=mps`
-  - `x265-mode=final`
-
-For Windows + RTX 4090 live-action footage:
-
-- quickest turnaround
-  - `preset=portrait`
-  - `encoder=hevc_nvenc`
-  - `backend=auto`
-
-- daily use
-  - `preset=portrait`
-  - `encoder=hevc_nvenc`
-  - `backend=cuda`
-
-- final export
-  - `preset=portrait`
-  - `encoder=libx265`
-  - `backend=cuda`
-  - `x265-mode=final`
-
-For Windows + RTX 4090 with a learned map model:
-
-- quickest comparison
-  - `preset=portrait`
-  - `encoder=hevc_nvenc`
-  - `backend=cuda`
-  - `model-path=/path/to/enhancement_model.pt`
-
-- final export
-  - `preset=portrait`
-  - `encoder=libx265`
-  - `backend=cuda`
-  - `x265-mode=balanced` or `final`
-  - `model-path=/path/to/enhancement_model.pt`
-
-For 4K material, slower throughput is expected. At that point, encoding and full-frame processing dominate runtime.
-
-## Quality Pipeline
-
-The converter currently includes:
-
-- SDR linearization
-- temporal exposure smoothing
-- scene cut detection
-- adaptive scene-level highlight boost
-- skin protection
-- high-chroma / memory-color protection
-- subtitle / burned-in text protection
-- dark noise suppression
-- specular / sky / clipped-white analysis
-- near-white rolloff
-- HDR10 PQ encoding
-
-The processing path has been optimized for Apple Silicon:
-
-- Torch / MPS path with reduced CPU synchronization points
-- cached PQ constants and Torch kernels
-- cached Rec.2020 matrix and sky gradient
-- reused blur operations
-- lighter subtitle mask in `fast_mode`
-
-The processing path also supports NVIDIA-backed processing on Windows when `torch` has CUDA support.
-
-## Training
-
-The learned-map model is trained from HDR videos that are converted into SDR/HDR linear frame pairs.
-
-Recommended workflow:
-
-```bash
-python scripts/prepare_data.py --input-dir /path/to/hdr_videos --out-dir /path/to/train_npz --sample-every 96
-python scripts/train.py --data-dir /path/to/train_npz --output-dir /path/to/train_out --device cuda
-python scripts/export_model.py --checkpoint /path/to/train_out/best.pt --output /path/to/train_out/enhancement_model.pt --device cuda
-```
-
-Notes:
-
-- `prepare_data.py` now stores the generated `sdr_linear` and `hdr_linear` arrays as `float16` to reduce dataset size while keeping training-time tensors in `float32`
-- for mixed-density datasets, a practical pattern is `sample_every=96` globally and `48` only for a small set of priority clips
-- keep a hold-out video outside the training set for manual evaluation
-
-## HDR Metadata Handling
-
-Completed exports are checked after writing.
-
-If expected HDR tags are missing, the tool automatically restamps the file so that the output keeps:
-
-- `color_space=bt2020nc`
-- `color_transfer=smpte2084`
-- `color_primaries=bt2020`
-
-Partial outputs saved after `Stop` are also restamped.
-
-To inspect a file manually:
-
-```bash
-ffprobe -v error -select_streams v:0 \
-  -show_entries stream=codec_name,pix_fmt,color_space,color_transfer,color_primaries \
-  -of json output_hdr.mp4
-```
+- 現行 README は `利用者向け` の内容に絞っています。
+- `peak nits` などの内部パラメータは GUI からは直接設定できません。
+- `.onnx` や DirectML は現行の利用手順には含めていません。
+- AI モデルなしでの運用は前提にしていません。
 
 ## License
 
 This project is licensed under the MIT License.
-
-## Review Tools
-
-Extract SDR frames:
-
-```bash
-sdr2hdr-frames input.mp4 review/frames --times 0.5,2.0,4.0
-```
-
-Extract tonemapped HDR preview PNGs:
-
-```bash
-sdr2hdr-frames output_hdr.mp4 review/hdr_frames --hdr-preview --count 4
-```
-
-## 日本語
-
-`sdr2hdr` は、AI 学習済み enhancement map とルールベース処理を組み合わせた、実写向けのオフライン SDR→HDR10 変換ツールです。macOS と Windows を対象にしており、GUI から複数ジョブをキューに積んで順番に処理できます。目的は「本物の HDR 撮影を再現すること」ではなく、「SDR 動画を HDR ディスプレイで自然に見える形へ安定して変換すること」です。
-
-### 主な特徴
-
-- SDR `BT.709` 動画を HDR10 互換 `HEVC Main10` へ変換
-- `m2ts` などのインターレース入力は自動でデインターレース
-- 肌、字幕、暗部ノイズ、白飛びしやすい領域を保護
-- シーン単位でハイライト強調量を調整
-- Apple Silicon では `MPS`、Windows + NVIDIA では `CUDA` を利用可能
-- macOS では `VideoToolbox`、Windows では `HEVC NVENC` を高速経路として利用
-- ハードウェアエンコード失敗時は `libx265` にフォールバック
-- 出力後に HDR メタデータを検証し、不足時は自動修復
-
-### 使い方
-
-前提条件:
-
-- `Python 3.11 以上`
-- `ffmpeg`
-- `ffprobe`
-- GPU 加速を使うなら `torch`
-
-補足:
-
-- macOS で `hevc_videotoolbox` を使うには VideoToolbox 対応の FFmpeg が必要です
-- Windows で `hevc_nvenc` を使うには NVENC 対応の FFmpeg が必要です
-
-インストール:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-```
-
-学習済みモデル:
-
-- `enhancement_model_20260308beta.pt`
-- ダウンロード: https://github.com/jpneagle/sdr2hdr/releases/tag/model
-- `portrait + --model-path` の既定強度は `0.25`
-- GUI では `AI Strength` スライダーで調整できます
-
-GUI 起動:
-
-```bash
-sdr2hdr
-```
-
-CLI 変換:
-
-```bash
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait
-```
-
-Windows + RTX 向けの例:
-
-```bash
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_nvenc --backend cuda
-```
-
-macOS 向けの例:
-
-```bash
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_videotoolbox
-```
-
-### 推奨設定
-
-- 実写素材の標準: `preset=portrait`
-- Apple Silicon:
-  - 高速重視: `hevc_videotoolbox`
-  - 品質重視: `libx265 + mps`
-- Windows + RTX 4090:
-  - 高速重視: `hevc_nvenc + auto`
-  - 品質重視: `libx265 + cuda`
-
-### 補足
-
-- `m2ts / mts / ts` 入力でも既定出力は `*_hdr.mp4`
-- MP4 にそのまま入らない音声は自動で `AAC` に変換
-- GUI では複数ファイルをキューに積んで順番に処理可能
-
-## 中文
-
-`sdr2hdr` 是一个把 AI 学习得到的 enhancement map 与规则式处理结合起来的离线 SDR→HDR10 转换工具，面向实拍素材，支持 macOS 和 Windows。它的目标不是“伪造真正的 HDR 拍摄素材”，而是把普通 SDR 视频稳定地转换成在 HDR 显示器上看起来更自然的 HDR10 文件。
-
-### 主要特性
-
-- 将 SDR `BT.709` 视频转换为 HDR10 兼容的 `HEVC Main10`
-- 对 `m2ts` 等隔行扫描输入自动做反交错
-- 保护肤色、字幕、暗部噪点和容易过曝的高亮区域
-- 按场景动态调整高亮增强强度
-- Apple Silicon 可使用 `MPS`
-- Windows + NVIDIA 可使用 `CUDA`
-- macOS 可使用 `VideoToolbox` 快速编码
-- Windows 可使用 `HEVC NVENC` 快速编码
-- 硬件编码失败时自动回退到 `libx265`
-- 输出完成后自动检查 HDR 元数据，必要时自动修复
-
-### 用法
-
-前提条件:
-
-- `Python 3.11+`
-- `ffmpeg`
-- `ffprobe`
-- 如果要用 GPU 加速，建议安装 `torch`
-
-补充:
-
-- macOS 使用 `hevc_videotoolbox` 需要 FFmpeg 带有 VideoToolbox 支持
-- Windows 使用 `hevc_nvenc` 需要 FFmpeg 带有 NVENC 支持
-
-安装:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
-```
-
-预训练模型:
-
-- `enhancement_model_20260308beta.pt`
-- 下载地址: https://github.com/jpneagle/sdr2hdr/releases/tag/model
-- `portrait + --model-path` 的默认强度是 `0.25`
-- 在 GUI 中可以通过 `AI Strength` 滑块调整
-
-启动 GUI:
-
-```bash
-sdr2hdr
-```
-
-命令行转换:
-
-```bash
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait
-```
-
-Windows + RTX 示例:
-
-```bash
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_nvenc --backend cuda
-```
-
-macOS 示例:
-
-```bash
-sdr2hdr input.mp4 output_hdr.mp4 --preset portrait --encoder hevc_videotoolbox
-```
-
-### 推荐设置
-
-- 实拍素材默认建议: `preset=portrait`
-- Apple Silicon:
-  - 速度优先: `hevc_videotoolbox`
-  - 质量优先: `libx265 + mps`
-- Windows + RTX 4090:
-  - 速度优先: `hevc_nvenc + auto`
-  - 质量优先: `libx265 + cuda`
-
-### 备注
-
-- 即使输入是 `m2ts / mts / ts`，默认输出也会使用 `*_hdr.mp4`
-- 不能直接封装进 MP4 的音频会自动转成 `AAC`
-- GUI 支持把多个视频加入队列后依次处理
-
-Extract linear HDR EXR frames:
-
-```bash
-sdr2hdr-frames output_hdr.mp4 review/hdr_exr --hdr-exr --count 4
-```
-
-Extract HDR TIFF frames:
-
-```bash
-sdr2hdr-frames output_hdr.mp4 review/hdr_tiff --hdr-tiff --count 4
-```
-
-Generate side-by-side comparisons:
-
-```bash
-sdr2hdr-compare input.mp4 output_hdr.mp4 review/compare --count 4
-```
-
-This writes:
-
-- comparison PNGs
-- HDR EXR frames
-- a `contact_sheet.png`
-
-## Notes
-
-- Input is assumed to be SDR `BT.709`
-- Interlaced inputs are automatically deinterlaced with `bwdif` during decode
-- Output is HDR10-compatible `HEVC Main10`
-- `torch` is optional, but recommended for Apple Silicon or CUDA acceleration
-- Windows `hevc_nvenc` requires an FFmpeg build with NVENC support
-- The project is optimized for practical HDR display output, not mastering-grade finishing
