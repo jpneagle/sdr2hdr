@@ -350,6 +350,8 @@ class SDRToHDRProcessor:
             return None
         if self.config.backend == "numpy":
             return None
+        if self.config.backend == "directml":
+            return None
         if self.config.backend == "torch-cpu":
             return "cpu"
         if self.config.backend == "cuda":

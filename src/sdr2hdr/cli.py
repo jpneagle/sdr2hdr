@@ -1,81 +1,83 @@
 from __future__ import annotations
 
 import argparse
-import platform
-import sys
+from pathlib import Path
 
-from sdr2hdr.app import (
-    ConversionCallbacks,
-    ConversionRequest,
+from .app import (
     PRESETS,
     X265_PROFILE_DEFAULTS,
-    default_encoder_for_platform,
+    ConversionCallbacks,
+    ConversionRequest,
+    build_output_path,
     run_conversion,
+    validate_request,
 )
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Convert SDR video into HDR10 HEVC output.")
-    parser.add_argument("input", help="Input SDR video path")
-    parser.add_argument("output", help="Output HDR10 video path")
+    parser = argparse.ArgumentParser(description="Convert SDR video to HDR10.")
+    parser.add_argument("input_path", help="Input SDR video path")
+    parser.add_argument("output_path", nargs="?", help="Output HDR video path")
     parser.add_argument("--preset", choices=sorted(PRESETS), default="portrait")
-    parser.add_argument("--peak-nits", type=float, default=None, help="Target HDR10 peak luminance")
-    parser.add_argument("--ai-strength", type=float, default=None, help="Blend factor for enhancement maps")
-    parser.add_argument("--highlight-boost", type=float, default=None, help="Base highlight expansion strength")
-    parser.add_argument("--detail-boost", type=float, default=None, help="Local contrast enhancement amount")
-    parser.add_argument(
-        "--encoder",
-        choices=["hevc_videotoolbox", "hevc_nvenc", "libx265"],
-        default=default_encoder_for_platform(platform.system()),
-    )
+    parser.add_argument("--encoder", default="libx265")
     parser.add_argument("--x265-mode", choices=sorted(X265_PROFILE_DEFAULTS), default="balanced")
-    parser.add_argument("--x265-preset", help="Override libx265 preset, e.g. veryfast, medium, slow")
-    parser.add_argument("--x265-crf", type=int, help="Override libx265 CRF value")
-    parser.add_argument("--processing-scale", type=float, default=None, help="Internal processing scale, 0.5-1.0")
-    parser.add_argument("--fast-mode", action="store_true", help="Use faster approximation filters")
-    parser.add_argument("--backend", choices=["auto", "numpy", "torch-cpu", "mps", "cuda"], default="auto")
+    parser.add_argument("--backend", choices=["auto", "numpy", "cuda", "mps"], default="auto")
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--model-path", required=True, help="Path to a TorchScript .pt enhancement model")
+    parser.add_argument("--ai-strength", type=float, default=0.25)
     parser.add_argument(
-        "--scene-cut-mode",
-        choices=["auto", "fixed"],
-        default="auto",
-        help="Reserved for future scene-cut detection strategy",
+        "--no-fallback-to-x265-on-hardware-error",
+        action="store_true",
+        help="Disable automatic fallback to libx265 when hardware encoding fails",
     )
-    parser.add_argument("--model-path", help="Optional TorchScript map-estimation model path")
-    parser.add_argument("--device", default="auto", help="Torch device when --model-path is supplied")
-    parser.add_argument("--max-frames", type=int, help="Limit the number of processed frames for debugging")
+    parser.add_argument(
+        "--discard-partial-output-on-cancel",
+        action="store_true",
+        help="Remove partial output instead of keeping it when cancellation happens",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    if argv is None:
-        argv = sys.argv[1:]
-    if not argv:
-        from sdr2hdr.gui import main as gui_main
-
-        return gui_main()
     parser = build_parser()
     args = parser.parse_args(argv)
+    output_path = args.output_path or build_output_path(args.input_path)
+    model_path = str(Path(args.model_path))
+    if Path(model_path).suffix.lower() != ".pt":
+        parser.error("--model-path must point to a .pt TorchScript model.")
+
     request = ConversionRequest(
-        input_path=args.input,
-        output_path=args.output,
+        input_path=str(Path(args.input_path)),
+        output_path=output_path,
         preset=args.preset,
         encoder=args.encoder,
         x265_mode=args.x265_mode,
-        x265_preset=args.x265_preset,
-        x265_crf=args.x265_crf,
-        peak_nits=args.peak_nits,
-        ai_strength=args.ai_strength,
-        highlight_boost=args.highlight_boost,
-        detail_boost=args.detail_boost,
-        processing_scale=args.processing_scale,
-        fast_mode=args.fast_mode,
         backend=args.backend,
-        model_path=args.model_path,
         device=args.device,
-        max_frames=args.max_frames,
-        fallback_to_x265_on_hardware_error=args.encoder in {"hevc_videotoolbox", "hevc_nvenc"},
+        model_path=model_path,
+        ai_strength=args.ai_strength,
+        fallback_to_x265_on_hardware_error=not args.no_fallback_to_x265_on_hardware_error,
+        keep_partial_output_on_cancel=not args.discard_partial_output_on_cancel,
     )
-    callbacks = ConversionCallbacks(on_status=None, on_progress=None, on_complete=None, on_error=None)
-    result = run_conversion(request, callbacks=callbacks)
-    print(f"Converted {result.processed_frames} frames to {result.output_path}")
+    validate_request(request)
+
+    callbacks = ConversionCallbacks(
+        on_status=lambda message: print(message, flush=True),
+        on_progress=lambda processed, total, fps: print(
+            f"{processed}/{total or '?'} frames ({fps:.1f} fps)" if fps else f"{processed}/{total or '?'} frames",
+            flush=True,
+        ),
+        on_complete=lambda result: print(
+            f"cancelled after {result.processed_frames} frames"
+            if result.cancelled
+            else f"completed: {result.output_path}",
+            flush=True,
+        ),
+        on_error=lambda message: print(message, flush=True),
+    )
+    run_conversion(request, callbacks=callbacks)
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

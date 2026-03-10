@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from sdr2hdr.ai import HeuristicEnhancer, TorchMapEnhancer
+from sdr2hdr.ai import HeuristicEnhancer, OnnxDmlMapEnhancer, TorchMapEnhancer, directml_is_available
 from sdr2hdr.core import ProcessorConfig, SDRToHDRProcessor
 from sdr2hdr.io import (
     ffprobe_video,
@@ -135,7 +135,12 @@ def build_request_config(request: ConversionRequest) -> tuple[ProcessorConfig, s
         config.processing_scale = request.processing_scale
     if request.fast_mode:
         config.fast_mode = True
-    config.backend = request.backend
+    if request.backend == "directml":
+        config.backend = "directml"
+    elif request.backend == "auto" and Path(request.model_path or "").suffix.lower() == ".onnx" and platform.system() == "Windows":
+        config.backend = "numpy"
+    else:
+        config.backend = request.backend
     profile = X265_PROFILE_DEFAULTS[request.x265_mode]
     x265_preset = request.x265_preset or profile["preset"]
     x265_crf = request.x265_crf if request.x265_crf is not None else profile["crf"]
@@ -151,18 +156,55 @@ def validate_request(request: ConversionRequest) -> None:
         raise ValueError("Output path is required.")
     if input_path.resolve() == output_path.resolve():
         raise ValueError("Input and output paths must be different.")
+    if not request.model_path or not request.model_path.strip():
+        raise ValueError("AI model is required. Select a model from the models folder.")
+    model_path = Path(request.model_path)
+    suffix = model_path.suffix.lower()
+    if suffix not in {".pt", ".onnx"}:
+        raise ValueError(f"Unsupported model format: {model_path.suffix}")
     if request.preset not in PRESETS:
         raise ValueError(f"Unknown preset: {request.preset}")
     if request.x265_mode not in X265_PROFILE_DEFAULTS:
         raise ValueError(f"Unknown x265 mode: {request.x265_mode}")
-    if request.model_path and not Path(request.model_path).exists():
+    if request.model_path and not model_path.exists():
         raise ValueError(f"Model file does not exist: {request.model_path}")
+    if request.backend == "directml" and suffix != ".onnx":
+        raise ValueError("DirectML requires an ONNX model (.onnx).")
+    if request.backend in {"cuda", "mps", "torch-cpu", "numpy"} and suffix != ".pt":
+        raise ValueError(f"Backend '{request.backend}' requires a TorchScript model (.pt).")
+    if request.backend == "auto" and suffix == ".onnx" and platform.system() != "Windows":
+        raise ValueError("ONNX DirectML models are only supported on Windows.")
 
 
 def resolve_model_device(request: ConversionRequest, torch_device: str | None) -> str:
     if request.device != "auto":
         return request.device
     return torch_device or "cpu"
+
+
+def resolve_model_backend(request: ConversionRequest, torch_device: str | None) -> str:
+    suffix = Path(request.model_path or "").suffix.lower()
+    if request.backend == "directml":
+        return "directml"
+    if request.backend == "auto":
+        if suffix == ".onnx" and platform.system() == "Windows":
+            return "directml"
+        if torch_device is not None:
+            return torch_device
+        return "numpy"
+    if request.backend == "numpy":
+        return "torch-cpu"
+    return request.backend
+
+
+def build_enhancer(request: ConversionRequest, torch_device: str | None) -> TorchMapEnhancer | OnnxDmlMapEnhancer:
+    model_backend = resolve_model_backend(request, torch_device)
+    if model_backend == "directml":
+        return OnnxDmlMapEnhancer(request.model_path or "")
+    return TorchMapEnhancer(
+        request.model_path or "",
+        device=resolve_model_device(request, torch_device if model_backend != "torch-cpu" else "cpu"),
+    )
 
 
 def _emit_status(callbacks: ConversionCallbacks | None, message: str) -> None:
@@ -275,11 +317,8 @@ def _run_conversion_once(
     info = ffprobe_video(request.input_path)
     total_frames = request.max_frames if request.max_frames is not None else info.frames
     processor = SDRToHDRProcessor(config, enhancer=HeuristicEnhancer())
-    if request.model_path:
-        processor.enhancer = TorchMapEnhancer(
-            request.model_path,
-            device=resolve_model_device(request, processor.torch_device),
-        )
+    _emit_status(callbacks, "Loading AI model")
+    processor.enhancer = build_enhancer(request, processor.torch_device)
     decoder = open_decoder(request.input_path, info)
     encoder = open_encoder(
         request.output_path,

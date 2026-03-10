@@ -9,7 +9,7 @@ try:
 except ImportError:  # pragma: no cover
     torch = None
 
-from sdr2hdr.ai import TorchMapEnhancer
+from sdr2hdr.ai import TorchMapEnhancer, directml_is_available
 from sdr2hdr.dataset import HDRSDRPairDataset, derive_target_maps
 from sdr2hdr.model import EnhancementUNet
 
@@ -99,6 +99,9 @@ class ModelDatasetTests(unittest.TestCase):
             self.assertEqual(maps.expansion.shape, (73, 121))
             self.assertTrue(np.all(maps.expansion >= 0.0))
             self.assertTrue(np.all(maps.expansion <= 1.0))
+
+    def test_directml_availability_helper_returns_bool(self) -> None:
+        self.assertIsInstance(directml_is_available(), bool)
 
 
 if __name__ == "__main__":

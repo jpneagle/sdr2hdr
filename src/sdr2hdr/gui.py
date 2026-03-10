@@ -29,6 +29,8 @@ X265_MODE_OPTIONS = {
     "final": "Final (Best Quality)",
 }
 
+MODELS_DIR = Path.cwd() / "models"
+
 
 def describe_mode_hint(encoder: str, mode: str, backend: str, preset: str, model_path: str) -> str:
     if encoder == "hevc_videotoolbox":
@@ -92,6 +94,7 @@ def open_path(path: str) -> None:
 class AppState:
     IDLE = "idle"
     RUNNING = "running"
+    CANCELLING = "cancelling"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -100,16 +103,29 @@ class AppState:
 @dataclass
 class QueueJob:
     request: ConversionRequest
-    status: str = "pending"
+    status: str = "queued"
 
 
 STATUS_LABELS = {
-    "pending": "",
+    "queued": "QUEUED",
+    "starting": "STARTING",
     "running": "RUNNING",
+    "cancelling": "CANCELLING",
     "completed": "OK",
     "failed": "FAILED",
     "cancelled": "CANCELLED",
 }
+
+
+def list_available_models(models_dir: Path | None = None) -> list[Path]:
+    models_dir = models_dir or MODELS_DIR
+    if not models_dir.exists():
+        return []
+    return sorted(path for path in models_dir.iterdir() if path.is_file() and path.suffix.lower() == ".pt")
+
+
+def filter_models_for_backend(models: list[Path], backend: str, system_name: str | None = None) -> list[Path]:
+    return [path for path in models if path.suffix.lower() == ".pt"]
 
 
 class SDR2HDRGUI:
@@ -128,6 +144,8 @@ class SDR2HDRGUI:
         self.system_name = platform.system()
         self.encoder_options = build_encoder_options(self.system_name)
         self.backend_options = build_backend_options(self.system_name)
+        self.available_models = list_available_models()
+        self.filtered_models = filter_models_for_backend(self.available_models, "auto", self.system_name)
         default_encoder = default_encoder_for_platform(self.system_name)
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
@@ -135,7 +153,9 @@ class SDR2HDRGUI:
         self.encoder_var = tk.StringVar(value=self.encoder_options[default_encoder])
         self.x265_mode_var = tk.StringVar(value=X265_MODE_OPTIONS["balanced"])
         self.backend_var = tk.StringVar(value=self.backend_options["auto"])
-        self.model_path_var = tk.StringVar()
+        default_model = self.filtered_models[0].name if self.filtered_models else ""
+        self.model_name_var = tk.StringVar(value=default_model)
+        self.model_path_var = tk.StringVar(value=str(self.filtered_models[0]) if self.filtered_models else "")
         self.ai_strength_var = tk.DoubleVar(value=0.25)
         self.ai_strength_label_var = tk.StringVar(value=format_ai_strength(0.25))
         self.status_var = tk.StringVar(value="Idle")
@@ -183,7 +203,14 @@ class SDR2HDRGUI:
         self.encoder_combo = self._add_combo_row(form, 3, "Encoder", self.encoder_var, list(self.encoder_options.values()))
         self.x265_combo = self._add_combo_row(form, 4, "Speed/Quality", self.x265_mode_var, list(X265_MODE_OPTIONS.values()))
         self.backend_combo = self._add_combo_row(form, 5, "Backend", self.backend_var, list(self.backend_options.values()))
-        self.model_entry = self._add_path_row(form, 6, "Model Path", self.model_path_var, self._browse_model)
+        self.model_combo = self._add_combo_row(
+            form,
+            6,
+            "AI Model",
+            self.model_name_var,
+            [path.name for path in self.filtered_models] or ["No compatible models"],
+        )
+        ttk.Button(form, text="Refresh", command=self._refresh_available_models).grid(row=6, column=2, padx=(8, 0))
         ttk.Label(form, text="AI Strength").grid(row=7, column=0, sticky="w", pady=6, padx=(0, 12))
         slider_row = ttk.Frame(form)
         slider_row.grid(row=7, column=1, sticky="ew", pady=6)
@@ -247,10 +274,14 @@ class SDR2HDRGUI:
         self.encoder_var.trace_add("write", self._sync_encoder_ui)
         self.x265_mode_var.trace_add("write", self._sync_mode_hint)
         self.backend_var.trace_add("write", self._sync_mode_hint)
+        self.backend_var.trace_add("write", self._refresh_model_choices)
         self.preset_var.trace_add("write", self._sync_mode_hint)
+        self.model_name_var.trace_add("write", self._sync_selected_model)
         self.model_path_var.trace_add("write", self._sync_model_controls)
         self._sync_encoder_ui()
         self._sync_ai_strength_label()
+        self._refresh_model_choices()
+        self._sync_selected_model()
         self._sync_model_controls()
         self._sync_mode_hint()
         self._refresh_job_list()
@@ -308,15 +339,24 @@ class SDR2HDRGUI:
             )
         )
 
+    def _sync_selected_model(self, *_: object) -> None:
+        selected_name = self.model_name_var.get().strip()
+        selected_path = next((path for path in self.filtered_models if path.name == selected_name), None)
+        self.model_path_var.set(str(selected_path) if selected_path else "")
+        self._sync_mode_hint()
+
     def _sync_ai_strength_label(self, *_: object) -> None:
         self.ai_strength_label_var.set(format_ai_strength(self.ai_strength_var.get()))
 
     def _sync_model_controls(self, *_: object) -> None:
         has_model = bool(self.model_path_var.get().strip())
-        scale_state = "normal" if has_model and self.state != AppState.RUNNING else "disabled"
+        running = self.state in {AppState.RUNNING, AppState.CANCELLING}
+        scale_state = "normal" if has_model and not running else "disabled"
         self.ai_strength_scale.configure(state=scale_state)
         self._sync_ai_strength_label()
         self._sync_mode_hint()
+        combo_state = "disabled" if running else "readonly"
+        self.model_combo.configure(state=combo_state if self.filtered_models else "disabled")
 
     def _selected_encoder(self) -> str:
         for key, label in self.encoder_options.items():
@@ -351,13 +391,24 @@ class SDR2HDRGUI:
             self.output_var.set(path)
             self.last_output_path = path
 
-    def _browse_model(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select learned model",
-            filetypes=[("TorchScript model", "*.pt"), ("All files", "*.*")],
-        )
-        if path:
-            self.model_path_var.set(path)
+    def _refresh_available_models(self) -> None:
+        self.available_models = list_available_models()
+        self._refresh_model_choices()
+
+    def _refresh_model_choices(self, *_: object) -> None:
+        self.filtered_models = filter_models_for_backend(self.available_models, self._selected_backend(), self.system_name)
+        values = [path.name for path in self.filtered_models] or ["No compatible models"]
+        self.model_combo.configure(values=values)
+        if self.filtered_models:
+            current = self.model_name_var.get().strip()
+            if current not in values:
+                self.model_name_var.set(values[0])
+            else:
+                self._sync_selected_model()
+        else:
+            self.model_name_var.set("No compatible models")
+            self.model_path_var.set("")
+        self._sync_model_controls()
 
     def _log(self, message: str) -> None:
         timestamp = time.strftime("%H:%M:%S")
@@ -394,19 +445,23 @@ class SDR2HDRGUI:
     def _refresh_job_list(self) -> None:
         self.queue_view.delete(*self.queue_view.get_children())
         for index, job in enumerate(self.queue_jobs):
-            status = job.status
-            if self.current_job_index == index and self.state == AppState.RUNNING:
-                status = "running"
             self.queue_view.insert(
                 "",
                 "end",
                 iid=str(index),
                 values=(
-                    STATUS_LABELS.get(status, status.upper()),
+                    STATUS_LABELS.get(job.status, job.status.upper()),
                     Path(job.request.input_path).name,
                     Path(job.request.output_path).name,
                 ),
             )
+
+    def _set_job_status(self, index: int | None, status: str) -> None:
+        if index is None:
+            return
+        if 0 <= index < len(self.queue_jobs):
+            self.queue_jobs[index].status = status
+            self._refresh_job_list()
 
     def _enqueue_request(self, request: ConversionRequest) -> None:
         self._validate_request(request)
@@ -447,7 +502,7 @@ class SDR2HDRGUI:
         return sorted((int(item_id) for item_id in self.queue_view.selection()), reverse=True)
 
     def _remove_selected_job(self) -> None:
-        if self.state == AppState.RUNNING:
+        if self.state in {AppState.RUNNING, AppState.CANCELLING}:
             return
         removed = False
         for index in self._selected_job_indices():
@@ -459,7 +514,7 @@ class SDR2HDRGUI:
             self._log("Removed selected queue items")
 
     def _clear_queue(self) -> None:
-        if self.state == AppState.RUNNING:
+        if self.state in {AppState.RUNNING, AppState.CANCELLING}:
             return
         self.queue_jobs.clear()
         self.current_job_index = None
@@ -468,24 +523,25 @@ class SDR2HDRGUI:
 
     def _next_pending_job_index(self) -> int | None:
         for index, job in enumerate(self.queue_jobs):
-            if job.status == "pending":
+            if job.status == "queued":
                 return index
         return None
 
     def _start_job(self, index: int) -> None:
         request = self.queue_jobs[index].request
         self.current_job_index = index
-        self.queue_jobs[index].status = "running"
+        self._set_job_status(index, "starting")
         self.cancel_token = CancelToken()
         self.last_output_path = request.output_path
         self.progress.configure(mode="indeterminate", value=0)
         self.progress.start(10)
-        self._refresh_job_list()
+        self.status_var.set("Starting")
+        self.progress_var.set("Loading AI model")
         self._log(f"Starting conversion: {Path(request.input_path).name}")
         self._set_state(AppState.RUNNING)
 
         callbacks = ConversionCallbacks(
-            on_status=lambda message: self.event_queue.put(("status", message)),
+            on_status=lambda message: self.event_queue.put(("detail_status", message)),
             on_progress=lambda processed, total, fps: self.event_queue.put(("progress", (processed, total, fps))),
             on_complete=lambda result: self.event_queue.put(("complete", result)),
             on_error=lambda message: self.event_queue.put(("error", message)),
@@ -501,7 +557,7 @@ class SDR2HDRGUI:
         self.worker.start()
 
     def _start(self) -> None:
-        if self.state == AppState.RUNNING:
+        if self.state in {AppState.RUNNING, AppState.CANCELLING}:
             return
         if not self.queue_jobs:
             try:
@@ -517,6 +573,10 @@ class SDR2HDRGUI:
     def _stop(self) -> None:
         if self.cancel_token is not None:
             self.cancel_token.cancel()
+            self._set_job_status(self.current_job_index, "cancelling")
+            self.status_var.set("Cancelling")
+            self.progress_var.set("Stopping current job")
+            self._set_state(AppState.CANCELLING)
             self._log("Stop requested")
 
     def _open_output(self) -> None:
@@ -531,13 +591,12 @@ class SDR2HDRGUI:
 
     def _set_state(self, state: str) -> None:
         self.state = state
-        running = state == AppState.RUNNING
+        running = state in {AppState.RUNNING, AppState.CANCELLING}
         idle_like = state in {AppState.IDLE, AppState.COMPLETED, AppState.FAILED, AppState.CANCELLED}
         field_state = "disabled" if running else "normal"
         combo_state = "disabled" if running else "readonly"
         self.input_entry.configure(state=field_state)
         self.output_entry.configure(state=field_state)
-        self.model_entry.configure(state=field_state)
         self.start_button.configure(state="disabled" if running else "normal")
         self.stop_button.configure(state="normal" if running else "disabled")
         self.add_queue_button.configure(state="disabled" if running else "normal")
@@ -552,20 +611,32 @@ class SDR2HDRGUI:
         self._sync_encoder_ui()
         self._sync_model_controls()
 
+    def _finish_current_job(self) -> None:
+        self.cancel_token = None
+        self.worker = None
+        self.current_job_index = None
+
     def _drain_events(self) -> None:
         while True:
             try:
                 kind, payload = self.event_queue.get_nowait()
             except queue.Empty:
                 break
-            if kind == "status":
-                self.status_var.set(str(payload))
+            if kind == "detail_status":
+                if self.state != AppState.CANCELLING:
+                    self.status_var.set(str(payload))
                 self._log(str(payload))
             elif kind == "progress":
                 processed, total, fps = payload
+                if self.current_job_index is not None:
+                    current_status = self.queue_jobs[self.current_job_index].status
+                    if current_status == "starting":
+                        self._set_job_status(self.current_job_index, "running")
                 if total:
                     self.progress.stop()
                     self.progress.configure(mode="determinate", maximum=100, value=(processed / total) * 100)
+                if self.state == AppState.RUNNING:
+                    self.status_var.set("Converting")
                 fps_text = f"{fps:.1f} fps" if fps else "n/a"
                 self.progress_var.set(f"{processed}/{total or '?'} frames, {fps_text}")
             elif kind == "complete":
@@ -573,18 +644,19 @@ class SDR2HDRGUI:
                 self.progress.stop()
                 self.progress.configure(value=100 if not result.cancelled else 0)
                 if self.current_job_index is not None:
-                    self.queue_jobs[self.current_job_index].status = "cancelled" if result.cancelled else "completed"
+                    self._set_job_status(self.current_job_index, "cancelled" if result.cancelled else "completed")
                     self.last_output_path = self.queue_jobs[self.current_job_index].request.output_path
-                self._refresh_job_list()
                 if result.cancelled:
                     self.status_var.set("Cancelled")
                     self.progress_var.set(f"{result.processed_frames} frames processed; partial output saved")
                     self._log("Conversion cancelled; partial output saved")
+                    self._finish_current_job()
                     self._set_state(AppState.CANCELLED)
                 else:
                     self.status_var.set("Completed")
                     self.progress_var.set(f"{result.processed_frames} frames written")
                     self._log(f"Completed: {Path(result.output_path).name}")
+                    self._finish_current_job()
                     next_index = self._next_pending_job_index()
                     if next_index is not None:
                         self._set_state(AppState.IDLE)
@@ -596,13 +668,12 @@ class SDR2HDRGUI:
             elif kind == "failed":
                 self.progress.stop()
                 self.progress.configure(value=0)
-                if self.current_job_index is not None:
-                    self.queue_jobs[self.current_job_index].status = "failed"
-                    self._refresh_job_list()
+                self._set_job_status(self.current_job_index, "failed")
                 self.status_var.set("Failed")
                 self.progress_var.set("Conversion failed")
                 self._log(str(payload))
                 messagebox.showerror("Conversion failed", str(payload))
+                self._finish_current_job()
                 next_index = self._next_pending_job_index()
                 if next_index is not None:
                     self._set_state(AppState.IDLE)

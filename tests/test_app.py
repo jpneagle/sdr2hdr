@@ -2,6 +2,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from sdr2hdr.app import (
@@ -14,19 +15,21 @@ from sdr2hdr.app import (
     is_hardware_encoder_failure,
     is_videotoolbox_failure,
     resolve_model_device,
+    resolve_model_backend,
     validate_request,
     run_conversion,
 )
+from sdr2hdr.ai import HeuristicEnhancer
 from sdr2hdr.io import has_expected_hdr_metadata
 
 
 class AppTests(unittest.TestCase):
     def test_build_output_path_adds_hdr_suffix(self) -> None:
-        self.assertEqual(build_output_path("/tmp/example.mp4"), "/tmp/example_hdr.mp4")
+        self.assertEqual(build_output_path("/tmp/example.mp4"), str(Path("/tmp/example_hdr.mp4")))
 
     def test_build_output_path_converts_transport_stream_extensions_to_mp4(self) -> None:
-        self.assertEqual(build_output_path("/tmp/example.m2ts"), "/tmp/example_hdr.mp4")
-        self.assertEqual(build_output_path("/tmp/example.ts"), "/tmp/example_hdr.mp4")
+        self.assertEqual(build_output_path("/tmp/example.m2ts"), str(Path("/tmp/example_hdr.mp4")))
+        self.assertEqual(build_output_path("/tmp/example.ts"), str(Path("/tmp/example_hdr.mp4")))
 
     def test_detects_videotoolbox_failure_message(self) -> None:
         self.assertTrue(is_videotoolbox_failure("Error: cannot create compression session: -12908"))
@@ -57,7 +60,52 @@ class AppTests(unittest.TestCase):
                 model_path=str(model_path),
             )
             config, _, _ = build_request_config(request)
-            self.assertEqual(config.ai_strength, 0.2)
+            self.assertEqual(config.ai_strength, 0.25)
+
+    def test_validate_request_requires_model_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "in.mp4"
+            input_path.write_bytes(b"")
+            request = ConversionRequest(
+                input_path=str(input_path),
+                output_path=str(Path(temp_dir) / "out.mp4"),
+                preset="portrait",
+                model_path=None,
+            )
+            with self.assertRaises(ValueError):
+                validate_request(request)
+
+    def test_validate_request_rejects_pt_for_directml(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "in.mp4"
+            model_path = Path(temp_dir) / "model.pt"
+            input_path.write_bytes(b"")
+            model_path.write_bytes(b"")
+            request = ConversionRequest(
+                input_path=str(input_path),
+                output_path=str(Path(temp_dir) / "out.mp4"),
+                preset="portrait",
+                backend="directml",
+                model_path=str(model_path),
+            )
+            with self.assertRaises(ValueError):
+                validate_request(request)
+
+    def test_validate_request_rejects_onnx_for_numpy_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "in.mp4"
+            model_path = Path(temp_dir) / "model.onnx"
+            input_path.write_bytes(b"")
+            model_path.write_bytes(b"")
+            request = ConversionRequest(
+                input_path=str(input_path),
+                output_path=str(Path(temp_dir) / "out.mp4"),
+                preset="portrait",
+                backend="numpy",
+                model_path=str(model_path),
+            )
+            with self.assertRaises(ValueError):
+                validate_request(request)
 
     def test_validate_request_rejects_missing_model_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -77,10 +125,22 @@ class AppTests(unittest.TestCase):
         self.assertEqual(resolve_model_device(request, "mps"), "mps")
         self.assertEqual(resolve_model_device(request, None), "cpu")
 
+    def test_resolve_model_backend_uses_directml_for_windows_onnx_auto(self) -> None:
+        request = ConversionRequest(
+            input_path="/tmp/in.mp4",
+            output_path="/tmp/out.mp4",
+            backend="auto",
+            model_path="model.onnx",
+        )
+        with mock.patch("sdr2hdr.app.platform.system", return_value="Windows"):
+            self.assertEqual(resolve_model_backend(request, None), "directml")
+
     def test_run_conversion_respects_cancel_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "input.mp4"
             output_path = Path(temp_dir) / "output.mp4"
+            model_path = Path(temp_dir) / "model.pt"
+            model_path.write_bytes(b"placeholder")
             subprocess.run(
                 [
                     "ffmpeg",
@@ -109,8 +169,11 @@ class AppTests(unittest.TestCase):
                 preset="poc",
                 encoder="libx265",
                 backend="numpy",
+                model_path=str(model_path),
             )
-            result = run_conversion(request, callbacks=ConversionCallbacks(), cancel_token=token)
+            with mock.patch("sdr2hdr.app.TorchMapEnhancer") as enhancer_cls:
+                enhancer_cls.return_value = HeuristicEnhancer()
+                result = run_conversion(request, callbacks=ConversionCallbacks(), cancel_token=token)
             self.assertTrue(result.cancelled)
             self.assertEqual(result.processed_frames, 0)
             self.assertFalse(output_path.exists())
@@ -119,6 +182,8 @@ class AppTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "input.mp4"
             output_path = Path(temp_dir) / "output.mp4"
+            model_path = Path(temp_dir) / "model.pt"
+            model_path.write_bytes(b"placeholder")
             subprocess.run(
                 [
                     "ffmpeg",
@@ -153,12 +218,15 @@ class AppTests(unittest.TestCase):
                 preset="poc",
                 encoder="libx265",
                 backend="numpy",
+                model_path=str(model_path),
             )
-            result = run_conversion(
-                request,
-                callbacks=ConversionCallbacks(on_progress=on_progress),
-                cancel_token=token,
-            )
+            with mock.patch("sdr2hdr.app.TorchMapEnhancer") as enhancer_cls:
+                enhancer_cls.return_value = HeuristicEnhancer()
+                result = run_conversion(
+                    request,
+                    callbacks=ConversionCallbacks(on_progress=on_progress),
+                    cancel_token=token,
+                )
             self.assertTrue(result.cancelled)
             self.assertGreaterEqual(result.processed_frames, 2)
             self.assertTrue(output_path.exists())
@@ -168,6 +236,8 @@ class AppTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "input.mp4"
             output_path = Path(temp_dir) / "output.mp4"
+            model_path = Path(temp_dir) / "model.pt"
+            model_path.write_bytes(b"placeholder")
             subprocess.run(
                 [
                     "ffmpeg",
@@ -196,9 +266,12 @@ class AppTests(unittest.TestCase):
                 preset="poc",
                 encoder="libx265",
                 backend="numpy",
+                model_path=str(model_path),
                 keep_partial_output_on_cancel=False,
             )
-            result = run_conversion(request, callbacks=ConversionCallbacks(), cancel_token=token)
+            with mock.patch("sdr2hdr.app.TorchMapEnhancer") as enhancer_cls:
+                enhancer_cls.return_value = HeuristicEnhancer()
+                result = run_conversion(request, callbacks=ConversionCallbacks(), cancel_token=token)
             self.assertTrue(result.cancelled)
             self.assertFalse(output_path.exists())
 
@@ -206,6 +279,8 @@ class AppTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "input.mp4"
             output_path = Path(temp_dir) / "output.mp4"
+            model_path = Path(temp_dir) / "model.pt"
+            model_path.write_bytes(b"placeholder")
             subprocess.run(
                 [
                     "ffmpeg",
@@ -232,9 +307,12 @@ class AppTests(unittest.TestCase):
                 preset="poc",
                 encoder="libx265",
                 backend="numpy",
+                model_path=str(model_path),
                 max_frames=12,
             )
-            result = run_conversion(request, callbacks=ConversionCallbacks())
+            with mock.patch("sdr2hdr.app.TorchMapEnhancer") as enhancer_cls:
+                enhancer_cls.return_value = HeuristicEnhancer()
+                result = run_conversion(request, callbacks=ConversionCallbacks())
             self.assertFalse(result.cancelled)
             self.assertTrue(has_expected_hdr_metadata(str(output_path)))
 
