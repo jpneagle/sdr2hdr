@@ -1,17 +1,19 @@
 # sdr2hdr
 
+## 日本語
+
 SDR 動画を HDR10 向けに変換する Python ツールです。GUI と CLI の両方を備えています。
 
 現行版は `AI model 前提` の運用です。変換時には学習済み TorchScript モデル (`.pt`) を指定するか、GUI の `models/` プルダウンから選択する必要があります。
 
-## Overview
+### Overview
 
 - 入力は通常の SDR 動画です。
 - 出力は HDR10 メタデータ付きの動画です。
 - GUI は queue 実行に対応しています。
 - AI モデルは `models/` フォルダ内の `.pt` ファイルを使用します。
 
-## Requirements
+### Requirements
 
 - Python
 - `ffmpeg` と `ffprobe` が実行可能であること
@@ -25,7 +27,7 @@ OS ごとの backend は次の通りです。
 
 `Auto` は使える環境で GPU backend を優先し、使えない場合は CPU 側へ寄せます。
 
-## Setup
+### Setup
 
 依存関係をインストールし、学習済みモデルを `models/` に置きます。
 
@@ -42,9 +44,9 @@ models/
   enhancement_model_20260310.pt
 ```
 
-## Quick Start
+### Quick Start
 
-### GUI
+#### GUI
 
 ```powershell
 python -m sdr2hdr.gui
@@ -59,7 +61,7 @@ GUI の基本動作:
 - `Add To Queue` または `Add Files` で queue へ追加
 - `Start Queue` で順次変換
 
-### CLI
+#### CLI
 
 ```powershell
 python -m sdr2hdr.cli input.mp4 output_hdr.mp4 --model-path models\enhancement_model_20260310.pt
@@ -71,9 +73,9 @@ python -m sdr2hdr.cli input.mp4 output_hdr.mp4 --model-path models\enhancement_m
 python -m sdr2hdr.cli input.mp4 --model-path models\enhancement_model_20260310.pt
 ```
 
-## GUI
+### GUI
 
-### Main Controls
+#### Main Controls
 
 - `Preset`
   - 既定値は `portrait`
@@ -90,7 +92,7 @@ python -m sdr2hdr.cli input.mp4 --model-path models\enhancement_model_20260310.p
 - `AI Strength`
   - 既定値は `0.25`
 
-### Queue
+#### Queue
 
 GUI は複数ジョブの queue 実行に対応しています。
 
@@ -107,7 +109,7 @@ GUI は複数ジョブの queue 実行に対応しています。
 - `Stop Current`
   - 実行中ジョブの停止を要求
 
-### Queue Status
+#### Queue Status
 
 Queue の status 表示は現在次の 7 種類です。
 
@@ -121,12 +123,12 @@ Queue の status 表示は現在次の 7 種類です。
 
 `Stop Current` を押した場合は、まず `CANCELLING` になり、終了時に `CANCELLED` へ確定します。
 
-### Cancel Behavior
+#### Cancel Behavior
 
 - キャンセル時は partial output を保持する前提です。
 - GUI の進捗欄には `partial output saved` と表示されます。
 
-## CLI
+### CLI
 
 現行 CLI の基本仕様:
 
@@ -150,7 +152,7 @@ python -m sdr2hdr.cli input.mp4 output_hdr.mp4 `
   --ai-strength 0.25
 ```
 
-## Models
+### Models
 
 - GUI は `models/` フォルダを参照します。
 - 読み込むのは `.pt` ファイルのみです。
@@ -162,13 +164,188 @@ python -m sdr2hdr.cli input.mp4 output_hdr.mp4 `
 - 配布用・運用用モデルは `models/` にまとめる
 - ファイル名で日付やバージョンを区別する
 
-## Notes
+### Notes
 
 - 現行 README は `利用者向け` の内容に絞っています。
 - `peak nits` などの内部パラメータは GUI からは直接設定できません。
 - `.onnx` や DirectML は現行の利用手順には含めていません。
 - AI モデルなしでの運用は前提にしていません。
 
-## License
+### License
+
+This project is licensed under the MIT License.
+
+## English
+
+`sdr2hdr` is a Python tool for converting SDR video to HDR10-style output. It provides both a GUI and a CLI.
+
+The current workflow assumes `AI model usage`. You must provide a trained TorchScript model (`.pt`) for conversion, either from the GUI dropdown or with `--model-path` in the CLI.
+
+### Overview
+
+- Input: regular SDR video
+- Output: HDR10-tagged video
+- The GUI supports queued batch processing
+- AI models are loaded from `.pt` files in the `models/` folder
+
+### Requirements
+
+- Python
+- `ffmpeg` and `ffprobe` available in `PATH`
+- Project dependencies including PyTorch
+
+Backend options by OS:
+
+- Windows: `Auto`, `CUDA`, `CPU / NumPy`
+- macOS: `Auto`, `MPS`, `CPU / NumPy`
+- Other platforms: `Auto`, `CPU / NumPy`
+
+`Auto` prefers a GPU backend when available and falls back toward CPU processing otherwise.
+
+### Setup
+
+Create a virtual environment, install the package, and place a trained model in `models/`.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -e .
+```
+
+Example model layout:
+
+```text
+models/
+  enhancement_model_20260310.pt
+```
+
+### Quick Start
+
+#### GUI
+
+```powershell
+python -m sdr2hdr.gui
+```
+
+Basic GUI workflow:
+
+- Set `Input` and `Output`
+- `Preset` defaults to `portrait`
+- Select a `.pt` model from `AI Model`
+- `AI Strength` defaults to `0.25`
+- Add jobs with `Add To Queue` or `Add Files`
+- Run them with `Start Queue`
+
+#### CLI
+
+```powershell
+python -m sdr2hdr.cli input.mp4 output_hdr.mp4 --model-path models\enhancement_model_20260310.pt
+```
+
+If `output_path` is omitted, the tool automatically creates a name with `_hdr` appended.
+
+```powershell
+python -m sdr2hdr.cli input.mp4 --model-path models\enhancement_model_20260310.pt
+```
+
+### GUI
+
+#### Main Controls
+
+- `Preset`
+  - Default: `portrait`
+- `Encoder`
+  - `libx265`, `NVENC`, or `VideoToolbox` depending on platform
+- `Speed/Quality`
+  - `Preview`, `Balanced`, `Final`
+- `Backend`
+  - Available backends depend on the current OS
+- `AI Model`
+  - Dropdown populated from `.pt` files in `models/`
+- `Refresh`
+  - Rescans `models/`
+- `AI Strength`
+  - Default: `0.25`
+
+#### Queue
+
+The GUI supports multi-job queue execution.
+
+- `Add To Queue`
+  - Adds the current form values to the queue
+- `Add Files`
+  - Adds multiple files to the queue
+- `Remove Selected`
+  - Removes selected queue items
+- `Clear Queue`
+  - Clears the queue
+- `Start Queue`
+  - Starts sequential processing
+- `Stop Current`
+  - Requests cancellation for the current job
+
+#### Queue Status
+
+The current queue status labels are:
+
+- `QUEUED`
+- `STARTING`
+- `RUNNING`
+- `CANCELLING`
+- `OK`
+- `FAILED`
+- `CANCELLED`
+
+If you press `Stop Current`, the job first moves to `CANCELLING` and then settles on `CANCELLED`.
+
+#### Cancel Behavior
+
+- Partial output is kept on cancellation
+- The GUI progress text reports `partial output saved`
+
+### CLI
+
+Current CLI behavior:
+
+- `input_path` is required
+- `output_path` is optional
+- `--model-path` is required
+- `--model-path` must point to a `.pt` model
+- `--preset` defaults to `portrait`
+- `--backend` supports `auto`, `numpy`, `cuda`, `mps`
+- `--ai-strength` defaults to `0.25`
+
+Example:
+
+```powershell
+python -m sdr2hdr.cli input.mp4 output_hdr.mp4 `
+  --preset portrait `
+  --backend auto `
+  --encoder libx265 `
+  --x265-mode balanced `
+  --model-path models\enhancement_model_20260310.pt `
+  --ai-strength 0.25
+```
+
+### Models
+
+- The GUI scans the `models/` folder
+- Only `.pt` files are shown
+- If no model is present, the GUI dropdown has no usable candidate
+- The CLI requires an explicit `--model-path`
+
+Recommended practice:
+
+- Keep deployment models in `models/`
+- Use filenames with dates or versions
+
+### Notes
+
+- This README is intentionally user-focused
+- Internal parameters such as `peak nits` are not directly exposed in the GUI
+- `.onnx` and DirectML are not part of the current usage flow
+- Running without an AI model is not the intended workflow
+
+### License
 
 This project is licensed under the MIT License.
