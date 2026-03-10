@@ -326,6 +326,18 @@ def compute_adaptive_highlight_boost(
     return float(np.clip(adjusted, minimum, maximum))
 
 
+def _torch_compile_available() -> bool:
+    if torch is None:
+        return False
+    if not hasattr(torch, "compile"):
+        return False
+    try:
+        major, minor = int(torch.__version__.split(".")[0]), int(torch.__version__.split(".")[1])
+        return major >= 2
+    except (ValueError, IndexError):
+        return False
+
+
 class SDRToHDRProcessor:
     def __init__(self, config: ProcessorConfig, enhancer: BaseEnhancer | None = None) -> None:
         self.config = config
@@ -337,6 +349,7 @@ class SDRToHDRProcessor:
         self._sky_gradient_t: torch.Tensor | None = None
         self._sky_gradient_height: int | None = None
         self._scaled_shape_cache: dict[tuple[int, int], tuple[int, int]] = {}
+        self._compiled = False
         if torch is not None and self.torch_device is not None:
             self._rec2020_t = torch.from_numpy(REC709_TO_REC2020).to(self.torch_device, dtype=torch.float32)
             self._laplacian_kernel_t = torch.tensor(
@@ -344,6 +357,25 @@ class SDRToHDRProcessor:
                 device=self.torch_device,
                 dtype=torch.float32,
             )
+            if self.torch_device == "cuda" and _torch_compile_available():
+                self._try_compile()
+
+    def _try_compile(self) -> None:
+        assert torch is not None
+        try:
+            # Test compile with a small tensor to verify Triton/inductor availability
+            _test_fn = torch.compile(lambda x: x + 1, mode="reduce-overhead")
+            _test_fn(torch.tensor([1.0], device=self.torch_device))
+        except Exception:
+            self._compiled = False
+            return
+        try:
+            self._torch_srgb_to_linear = torch.compile(self._torch_srgb_to_linear, mode="reduce-overhead")  # type: ignore[assignment]
+            self._torch_linear_to_pq = torch.compile(self._torch_linear_to_pq, mode="reduce-overhead")  # type: ignore[assignment]
+            self._torch_heuristic_maps = torch.compile(self._torch_heuristic_maps, mode="reduce-overhead")  # type: ignore[assignment]
+            self._compiled = True
+        except Exception:
+            self._compiled = False
 
     def _resolve_torch_device(self) -> str | None:
         if torch is None:
@@ -394,7 +426,10 @@ class SDRToHDRProcessor:
 
     def _tensor_from_rgb(self, frame_rgb: np.ndarray) -> torch.Tensor:
         assert torch is not None
-        return torch.from_numpy(frame_rgb).to(self.torch_device, dtype=torch.float32)
+        t = torch.from_numpy(frame_rgb)
+        if self.torch_device == "cuda":
+            return t.pin_memory().to(self.torch_device, dtype=torch.float32, non_blocking=True)
+        return t.to(self.torch_device, dtype=torch.float32)
 
     def _torch_compute_luma(self, frame_linear: torch.Tensor) -> torch.Tensor:
         return frame_linear[..., 0] * 0.2627 + frame_linear[..., 1] * 0.6780 + frame_linear[..., 2] * 0.0593
@@ -477,6 +512,7 @@ class SDRToHDRProcessor:
         return torch.clamp(vivid * (0.35 + 0.65 * midtone), 0.0, 1.0)
 
     def _torch_memory_color_mask(self, frame_linear_t: torch.Tensor, luma_unit: torch.Tensor) -> torch.Tensor:
+        dt = frame_linear_t.dtype
         r = frame_linear_t[..., 0]
         g = frame_linear_t[..., 1]
         b = frame_linear_t[..., 2]
@@ -484,9 +520,9 @@ class SDRToHDRProcessor:
         rn = r / sum_rgb
         gn = g / sum_rgb
         bn = b / sum_rgb
-        foliage = ((gn > rn) & (gn > bn) & (gn > 0.34)).to(torch.float32) * torch.clamp((gn - bn) * 3.2, 0.0, 1.0)
-        warm = ((rn > gn) & (gn > bn) & (rn > 0.38)).to(torch.float32) * torch.clamp((rn - bn) * 2.8, 0.0, 1.0)
-        cyan_blue = ((bn > rn) & (bn > 0.32)).to(torch.float32) * torch.clamp((bn - rn) * 3.0, 0.0, 1.0)
+        foliage = ((gn > rn) & (gn > bn) & (gn > 0.34)).to(dt) * torch.clamp((gn - bn) * 3.2, 0.0, 1.0)
+        warm = ((rn > gn) & (gn > bn) & (rn > 0.38)).to(dt) * torch.clamp((rn - bn) * 2.8, 0.0, 1.0)
+        cyan_blue = ((bn > rn) & (bn > 0.32)).to(dt) * torch.clamp((bn - rn) * 3.0, 0.0, 1.0)
         valid_luma = torch.clamp((luma_unit - 0.08) / 0.22, 0.0, 1.0) * (
             1.0 - torch.clamp((luma_unit - 0.92) / 0.08, 0.0, 1.0)
         )
@@ -529,7 +565,7 @@ class SDRToHDRProcessor:
             & (r > b)
             & (g > b * 0.9)
         )
-        return skin.to(torch.float32)
+        return skin.to(frame_linear_t.dtype)
 
     def _torch_subtitle_mask(self, frame_rgb_t: torch.Tensor, luma_unit: torch.Tensor) -> torch.Tensor:
         gray = frame_rgb_t[..., 0] * 0.2990 + frame_rgb_t[..., 1] * 0.5870 + frame_rgb_t[..., 2] * 0.1140
@@ -614,11 +650,11 @@ class SDRToHDRProcessor:
         frame_linear_t = self._torch_srgb_to_linear(frame_rgb_t)
         luma_t = torch.clamp(self._torch_compute_luma(frame_linear_t), 0.0, 1.0)
         chroma_t = self._torch_compute_chroma(frame_linear_t)
-        scene_maps_t = torch.stack([self._torch_downsample(luma_t), self._torch_downsample(chroma_t)]).detach()
+        scene_maps_t = torch.stack([self._torch_downsample(luma_t), self._torch_downsample(chroma_t)])
         scene_maps = scene_maps_t.cpu().numpy()
         luma_small = scene_maps[0]
         chroma_small = scene_maps[1]
-        exposure_mean = float(luma_t.mean().detach().cpu().numpy())
+        exposure_mean = luma_t.mean().item()
         exposure, scene_cut = self.state.update(
             exposure_mean,
             self.config.scene_smoothing,
@@ -639,46 +675,58 @@ class SDRToHDRProcessor:
                 maps_protection = maps_protection.to(frame_linear_t.device)
             skin_mask = self._torch_skin_mask(frame_linear_t)
         else:
-            frame_linear_np = frame_linear_t.detach().cpu().numpy()
+            frame_linear_np = frame_linear_t.cpu().numpy()
             maps = self.enhancer.estimate(frame_linear_np)
             maps_expansion = torch.from_numpy(maps.expansion).to(self.torch_device, dtype=torch.float32)
             maps_contrast = torch.from_numpy(maps.contrast).to(self.torch_device, dtype=torch.float32)
             maps_protection = torch.from_numpy(maps.protection).to(self.torch_device, dtype=torch.float32)
             skin_mask = torch.from_numpy(estimate_skin_mask(frame_linear_np)).to(self.torch_device, dtype=torch.float32)
+
+        # --- Phase 3: fp16 mask computation ---
+        _mask_dtype = torch.float16 if self.torch_device == "cuda" else torch.float32
+        frame_linear_h = frame_linear_t.to(_mask_dtype) if _mask_dtype != torch.float32 else frame_linear_t
+
         luma_t = torch.clamp(self._torch_compute_luma(frame_linear_t), 0.0, 2.0)
         luma_unit = torch.clamp(luma_t, 0.0, 1.0)
+        luma_unit_h = luma_unit.to(_mask_dtype) if _mask_dtype != torch.float32 else luma_unit
+
         subtitle_mask = (
             self._torch_subtitle_mask_fast(frame_rgb_t, luma_unit)
             if self.config.fast_mode
             else self._torch_subtitle_mask(frame_rgb_t, luma_unit)
-        )
+        ).to(_mask_dtype)
         blur_t = self._torch_blur(torch.clamp(luma_unit, 0.0, 1.0), 5)
-        residual_t = torch.abs(luma_unit - blur_t)
-        noise_mask = torch.clamp(residual_t / torch.clamp(luma_unit + 0.05, min=0.05) * 6.0, 0.0, 1.0)
+        blur_h = blur_t.to(_mask_dtype) if _mask_dtype != torch.float32 else blur_t
+        residual_h = torch.abs(luma_unit_h - blur_h)
+        noise_mask = torch.clamp(residual_h / torch.clamp(luma_unit_h + 0.05, min=0.05) * 6.0, 0.0, 1.0)
         noise_mask = noise_mask * torch.clamp(
-            (self.config.shadow_noise_floor - luma_unit) / max(self.config.shadow_noise_floor, 1e-4),
+            (self.config.shadow_noise_floor - luma_unit_h) / max(self.config.shadow_noise_floor, 1e-4),
             0.0,
             1.0,
         )
-        chroma_t = self._torch_compute_chroma(frame_linear_t)
-        neutral = 1.0 - torch.clamp(chroma_t / torch.clamp(luma_unit, min=1e-4), 0.0, 1.0)
-        specular_mask = torch.clamp(torch.clamp((luma_unit - 0.58) / 0.42, 0.0, 1.0) * (0.45 + 0.55 * neutral), 0.0, 1.0)
-        r = frame_linear_t[..., 0]
-        g = frame_linear_t[..., 1]
-        b = frame_linear_t[..., 2]
-        blue = ((b > g) & (g > r)).to(torch.float32)
+        chroma_h = self._torch_compute_chroma(frame_linear_h)
+        neutral = 1.0 - torch.clamp(chroma_h / torch.clamp(luma_unit_h, min=1e-4), 0.0, 1.0)
+        specular_mask = torch.clamp(torch.clamp((luma_unit_h - 0.58) / 0.42, 0.0, 1.0) * (0.45 + 0.55 * neutral), 0.0, 1.0)
+        r = frame_linear_h[..., 0]
+        g = frame_linear_h[..., 1]
+        b = frame_linear_h[..., 2]
+        blue = ((b > g) & (g > r)).to(_mask_dtype)
         hue_strength = torch.clamp((b - r) * 2.4, 0.0, 1.0)
-        vertical = self._get_sky_gradient(frame_linear_t.shape[0])
+        vertical = self._get_sky_gradient(frame_linear_t.shape[0]).to(_mask_dtype)
         sky_mask = blue * hue_strength * vertical
-        clipped_white_mask = self._torch_clipped_white_mask(frame_linear_t, luma_unit, detail_base=blur_t)
-        high_chroma_mask = self._torch_high_chroma_mask(frame_linear_t, luma_unit)
-        memory_color_mask = self._torch_memory_color_mask(frame_linear_t, luma_unit)
-        highlight_mask = torch.clamp(specular_mask * 0.75 + sky_mask * 0.35 + maps_expansion * 0.25, 0.0, 1.0)
+        clipped_white_mask = self._torch_clipped_white_mask(frame_linear_h, luma_unit_h, detail_base=blur_h)
+        high_chroma_mask = self._torch_high_chroma_mask(frame_linear_h, luma_unit_h)
+        memory_color_mask = self._torch_memory_color_mask(frame_linear_h, luma_unit_h)
+        skin_mask = skin_mask.to(_mask_dtype)
+        maps_expansion_h = maps_expansion.to(_mask_dtype) if _mask_dtype != torch.float32 else maps_expansion
+        maps_protection_h = maps_protection.to(_mask_dtype) if _mask_dtype != torch.float32 else maps_protection
+
+        highlight_mask = torch.clamp(specular_mask * 0.75 + sky_mask * 0.35 + maps_expansion_h * 0.25, 0.0, 1.0)
         highlight_mask = highlight_mask * (1.0 - clipped_white_mask * self.config.clipped_white_protection)
-        rolloff = self._torch_near_white_rolloff(luma_unit)
+        rolloff = self._torch_near_white_rolloff(luma_unit).to(_mask_dtype)
         limited_maps_expansion = self._torch_limit_ai_highlight_expansion(
-            maps_expansion,
-            luma_unit,
+            maps_expansion_h,
+            luma_unit_h,
             clipped_white_mask,
             rolloff,
         )
@@ -690,7 +738,7 @@ class SDRToHDRProcessor:
                     torch.maximum(noise_mask * 0.65, clipped_white_mask * 0.95),
                     torch.maximum(
                         torch.maximum(high_chroma_mask * 0.75, memory_color_mask * 0.85),
-                        maps_protection * 0.60,
+                        maps_protection_h * 0.60,
                     ),
                 ),
             ),
@@ -700,7 +748,7 @@ class SDRToHDRProcessor:
         limited_maps_expansion = limited_maps_expansion * ai_gate
         protected = torch.clamp(
             self.config.skin_protection * skin_mask
-            + 0.25 * maps_protection
+            + 0.25 * maps_protection_h
             + self.config.subtitle_protection * subtitle_mask
             + 0.35 * noise_mask,
             0.0,
@@ -708,23 +756,26 @@ class SDRToHDRProcessor:
         )
         protected = torch.clamp(protected + clipped_white_mask * self.config.clipped_white_protection, 0.0, 1.0)
 
-        scene_mean_stats = torch.stack(
-            [
-                skin_mask.mean(),
-                specular_mask.mean(),
-                sky_mask.mean(),
-                clipped_white_mask.mean(),
-                noise_mask.mean(),
-            ]
-        ).detach().cpu().numpy()
+        skin_ratio = skin_mask.mean().item()
+        specular_ratio = specular_mask.mean().item()
+        sky_ratio = sky_mask.mean().item()
+        clipped_white_ratio = clipped_white_mask.mean().item()
+        noise_ratio = noise_mask.mean().item()
+
         scene_boost = self._scene_highlight_boost(
-            float(scene_mean_stats[0]),
-            float(scene_mean_stats[1]),
-            float(scene_mean_stats[2]),
-            float(scene_mean_stats[3]),
-            scene_cut,
+            skin_ratio, specular_ratio, sky_ratio, clipped_white_ratio, scene_cut,
         )
         base_boost = scene_boost * (0.75 if scene_cut else 1.0)
+
+        # --- Promote masks back to fp32 for blending with frame data ---
+        highlight_mask = highlight_mask.to(torch.float32)
+        rolloff = rolloff.to(torch.float32)
+        limited_maps_expansion = limited_maps_expansion.to(torch.float32)
+        noise_mask = noise_mask.to(torch.float32)
+        protected = protected.to(torch.float32)
+        ai_gate = ai_gate.to(torch.float32)
+        maps_contrast = maps_contrast.to(torch.float32) if maps_contrast.dtype != torch.float32 else maps_contrast
+
         expanded = torch.clamp(frame_linear_t * (1.0 + highlight_mask[..., None] * base_boost * rolloff[..., None]), 0.0, 4.0)
         ai_expanded = torch.clamp(
             frame_linear_t
@@ -751,7 +802,7 @@ class SDRToHDRProcessor:
             * (
                 self.config.detail_boost
                 * (0.35 + 0.65 * maps_contrast * ai_gate)
-                * (1.0 - 0.6 * float(scene_mean_stats[4]))
+                * (1.0 - 0.6 * noise_ratio)
             ),
             0.0,
             2.0,
@@ -773,7 +824,8 @@ class SDRToHDRProcessor:
 
     def process_frame(self, frame_bgr8: np.ndarray) -> np.ndarray:
         if self.torch_device is not None:
-            return self._process_frame_torch(frame_bgr8)
+            with torch.inference_mode():
+                return self._process_frame_torch(frame_bgr8)
         original_height, original_width = frame_bgr8.shape[:2]
         if self.config.processing_scale < 0.999:
             scaled_height, scaled_width = self._get_scaled_shape(original_height, original_width)

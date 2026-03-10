@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import platform
+import queue
+import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -334,30 +336,75 @@ def _run_conversion_once(
     encoder_broken_pipe = False
     start = time.monotonic()
     _emit_status(callbacks, "Preparing conversion")
+
+    _SENTINEL = object()
+    decode_q: queue.Queue = queue.Queue(maxsize=3)
+    encode_q: queue.Queue = queue.Queue(maxsize=3)
+    pipeline_error: list[BaseException] = []
+
+    def _decoder_thread() -> None:
+        try:
+            frame_count = 0
+            while True:
+                if cancel_token and cancel_token.cancel_requested:
+                    break
+                if request.max_frames is not None and frame_count >= request.max_frames:
+                    break
+                frame = read_frame(decoder, info.width, info.height)
+                if frame is None:
+                    break
+                decode_q.put(frame)
+                frame_count += 1
+        except Exception as exc:
+            pipeline_error.append(exc)
+        finally:
+            decode_q.put(_SENTINEL)
+
+    def _encoder_thread() -> None:
+        nonlocal encoder_broken_pipe
+        try:
+            assert encoder.stdin is not None
+            while True:
+                item = encode_q.get()
+                if item is _SENTINEL:
+                    break
+                try:
+                    encoder.stdin.write(item.tobytes())
+                except BrokenPipeError:
+                    encoder_broken_pipe = True
+                    break
+        except Exception as exc:
+            pipeline_error.append(exc)
+
+    dec_thread = threading.Thread(target=_decoder_thread, daemon=True)
+    enc_thread = threading.Thread(target=_encoder_thread, daemon=True)
+    dec_thread.start()
+    enc_thread.start()
+
     try:
         while True:
             if cancel_token and cancel_token.cancel_requested:
                 cancelled = True
                 _emit_status(callbacks, "Cancelling")
                 break
-            if request.max_frames is not None and processed >= request.max_frames:
+            if encoder_broken_pipe:
                 break
-            frame = read_frame(decoder, info.width, info.height)
-            if frame is None:
+            item = decode_q.get()
+            if item is _SENTINEL:
                 break
-            hdr_frame = processor.process_frame(frame)
-            assert encoder.stdin is not None
-            try:
-                encoder.stdin.write(hdr_frame.tobytes())
-            except BrokenPipeError:
-                encoder_broken_pipe = True
-                break
+            hdr_frame = processor.process_frame(item)
+            encode_q.put(hdr_frame)
             processed += 1
             if processed == 1:
                 _emit_status(callbacks, "Converting")
             elapsed = max(time.monotonic() - start, 1e-6)
             fps = processed / elapsed
             _emit_progress(callbacks, processed, total_frames, fps)
+        encode_q.put(_SENTINEL)
+        enc_thread.join(timeout=30)
+        dec_thread.join(timeout=10)
+        if pipeline_error:
+            raise pipeline_error[0]
     except Exception as exc:
         _emit_error(callbacks, str(exc))
         raise

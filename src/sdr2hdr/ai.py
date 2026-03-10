@@ -110,7 +110,7 @@ class TorchMapEnhancer(BaseEnhancer):
                 mode="bilinear",
                 align_corners=False,
             )
-        with torch.no_grad():
+        with torch.inference_mode():
             output = self.model(tensor)
         if tuple(output.shape[-2:]) != (height, width):
             output = F.interpolate(output, size=(height, width), mode="bilinear", align_corners=False)
@@ -131,9 +131,9 @@ class TorchMapEnhancer(BaseEnhancer):
         tensor = torch.from_numpy(frame_linear).to(self.device, dtype=torch.float32)
         expansion_t, contrast_t, protection_t = self.estimate_torch(tensor)
         return EnhancementMaps(
-            expansion=expansion_t.detach().cpu().numpy(),
-            contrast=contrast_t.detach().cpu().numpy(),
-            protection=protection_t.detach().cpu().numpy(),
+            expansion=expansion_t.cpu().numpy(),
+            contrast=contrast_t.cpu().numpy(),
+            protection=protection_t.cpu().numpy(),
         )
 
 
