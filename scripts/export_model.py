@@ -9,8 +9,13 @@ from sdr2hdr.model import EnhancementUNet
 
 
 def export_torchscript(model: EnhancementUNet, output_path: Path) -> None:
-    scripted = torch.jit.script(model)
-    scripted = torch.jit.optimize_for_inference(scripted)
+    # Export TorchScript from a CPU copy so the serialized graph stays portable
+    # across CUDA, MPS, and CPU runtimes.
+    cpu_model = EnhancementUNet()
+    cpu_state_dict = {name: tensor.detach().cpu() for name, tensor in model.state_dict().items()}
+    cpu_model.load_state_dict(cpu_state_dict)
+    cpu_model.eval()
+    scripted = torch.jit.script(cpu_model)
     torch.jit.save(scripted, str(output_path))
 
 
