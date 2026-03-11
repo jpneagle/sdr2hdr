@@ -12,11 +12,6 @@ except ImportError:  # pragma: no cover - optional dependency
     torch = None
     F = None
 
-try:
-    import onnxruntime as ort
-except ImportError:  # pragma: no cover - optional dependency
-    ort = None
-
 
 @dataclass
 class EnhancementMaps:
@@ -45,15 +40,6 @@ def estimate_heuristic_maps(frame_linear: np.ndarray) -> EnhancementMaps:
 class BaseEnhancer:
     def estimate(self, frame_linear: np.ndarray) -> EnhancementMaps:
         raise NotImplementedError
-
-
-def directml_is_available() -> bool:
-    if ort is None:
-        return False
-    try:
-        return "DmlExecutionProvider" in ort.get_available_providers()
-    except Exception:
-        return False
 
 
 class HeuristicEnhancer(BaseEnhancer):
@@ -135,53 +121,3 @@ class TorchMapEnhancer(BaseEnhancer):
             contrast=contrast_t.cpu().numpy(),
             protection=protection_t.cpu().numpy(),
         )
-
-
-class OnnxDmlMapEnhancer(BaseEnhancer):
-    """ONNX Runtime DirectML-backed enhancer for Windows fallback inference."""
-
-    def __init__(self, model_path: str, inference_scale: float = 0.5) -> None:
-        if ort is None:  # pragma: no cover - optional dependency
-            raise RuntimeError("onnxruntime-directml is not installed; install sdr2hdr[directml] to use DirectML")
-        if not directml_is_available():
-            raise RuntimeError("DirectML execution provider is unavailable in this environment")
-        self.session = ort.InferenceSession(
-            model_path,
-            providers=["DmlExecutionProvider", "CPUExecutionProvider"],
-        )
-        self.input_name = self.session.get_inputs()[0].name
-        self.inference_scale = float(np.clip(inference_scale, 0.1, 1.0))
-
-    def _target_size(self, height: int, width: int) -> tuple[int, int]:
-        if self.inference_scale >= 0.999:
-            return height, width
-        return (
-            max(64, int(round(height * self.inference_scale))),
-            max(64, int(round(width * self.inference_scale))),
-        )
-
-    def _run_model(self, frame_linear: np.ndarray) -> np.ndarray:
-        height, width = frame_linear.shape[:2]
-        target_height, target_width = self._target_size(height, width)
-        model_input = frame_linear
-        if (target_height, target_width) != (height, width):
-            model_input = cv2.resize(frame_linear, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
-        tensor = model_input.transpose(2, 0, 1)[None].astype(np.float32, copy=False)
-        output = self.session.run(None, {self.input_name: tensor})[0].squeeze(0)
-        if tuple(output.shape[-2:]) != (height, width):
-            output = np.stack(
-                [
-                    cv2.resize(output[channel], (width, height), interpolation=cv2.INTER_LINEAR)
-                    for channel in range(output.shape[0])
-                ],
-                axis=0,
-            )
-        return output
-
-    def estimate(self, frame_linear: np.ndarray) -> EnhancementMaps:
-        output = self._run_model(frame_linear)
-        base_maps = estimate_heuristic_maps(frame_linear)
-        expansion = np.clip(base_maps.expansion + output[0], 0.0, 1.0)
-        contrast = np.clip(base_maps.contrast + output[1], 0.0, 1.0)
-        protection = np.clip(base_maps.protection + output[2], 0.0, 1.0)
-        return EnhancementMaps(expansion=expansion, contrast=contrast, protection=protection)

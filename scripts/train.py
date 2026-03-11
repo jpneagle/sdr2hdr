@@ -15,6 +15,17 @@ from sdr2hdr.dataset import HDRSDRPairDataset
 from sdr2hdr.model import EnhancementUNet
 
 
+def resolve_training_device(requested: str) -> torch.device:
+    if requested != "auto":
+        return torch.device(requested)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 def total_variation_loss(tensor: torch.Tensor) -> torch.Tensor:
     dx = torch.abs(tensor[:, :, :, 1:] - tensor[:, :, :, :-1]).mean()
     dy = torch.abs(tensor[:, :, 1:, :] - tensor[:, :, :-1, :]).mean()
@@ -39,7 +50,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Train enhancement map estimator.")
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--device", default="auto")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--patch-size", type=int, default=256)
@@ -62,13 +73,14 @@ def main() -> int:
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
-    device = torch.device(args.device)
+    device = resolve_training_device(args.device)
     model = EnhancementUNet().to(device)
     optimizer = AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
     warmup = LinearLR(optimizer, start_factor=0.2, total_iters=3)
     cosine = CosineAnnealingLR(optimizer, T_max=max(1, args.epochs - 3))
     scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[3])
-    scaler = torch.amp.GradScaler(device=device.type, enabled=device.type != "cpu")
+    amp_enabled = device.type == "cuda"
+    scaler = torch.amp.GradScaler(device=device.type, enabled=amp_enabled)
     best_val = float("inf")
 
     for epoch in range(args.epochs):
@@ -79,7 +91,7 @@ def main() -> int:
             target_maps = batch["target_maps"].to(device)
             clip_mask = batch["clip_mask"].to(device)
             optimizer.zero_grad(set_to_none=True)
-            with torch.amp.autocast(device_type=device.type, enabled=device.type != "cpu"):
+            with torch.amp.autocast(device_type=device.type, enabled=amp_enabled):
                 pred = model(sdr_linear)
                 loss, _ = compute_loss(pred, target_maps, clip_mask)
             scaler.scale(loss).backward()

@@ -75,23 +75,7 @@ class AppTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_request(request)
 
-    def test_validate_request_rejects_pt_for_directml(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            input_path = Path(temp_dir) / "in.mp4"
-            model_path = Path(temp_dir) / "model.pt"
-            input_path.write_bytes(b"")
-            model_path.write_bytes(b"")
-            request = ConversionRequest(
-                input_path=str(input_path),
-                output_path=str(Path(temp_dir) / "out.mp4"),
-                preset="portrait",
-                backend="directml",
-                model_path=str(model_path),
-            )
-            with self.assertRaises(ValueError):
-                validate_request(request)
-
-    def test_validate_request_rejects_onnx_for_numpy_backend(self) -> None:
+    def test_validate_request_rejects_non_pt_model(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "in.mp4"
             model_path = Path(temp_dir) / "model.onnx"
@@ -125,15 +109,15 @@ class AppTests(unittest.TestCase):
         self.assertEqual(resolve_model_device(request, "mps"), "mps")
         self.assertEqual(resolve_model_device(request, None), "cpu")
 
-    def test_resolve_model_backend_uses_directml_for_windows_onnx_auto(self) -> None:
+    def test_resolve_model_backend_uses_torch_device_for_auto(self) -> None:
         request = ConversionRequest(
             input_path="/tmp/in.mp4",
             output_path="/tmp/out.mp4",
             backend="auto",
-            model_path="model.onnx",
+            model_path="model.pt",
         )
-        with mock.patch("sdr2hdr.app.platform.system", return_value="Windows"):
-            self.assertEqual(resolve_model_backend(request, None), "directml")
+        self.assertEqual(resolve_model_backend(request, "mps"), "mps")
+        self.assertEqual(resolve_model_backend(request, None), "numpy")
 
     def test_run_conversion_respects_cancel_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

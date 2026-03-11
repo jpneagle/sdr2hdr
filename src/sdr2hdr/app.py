@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from sdr2hdr.ai import HeuristicEnhancer, OnnxDmlMapEnhancer, TorchMapEnhancer, directml_is_available
+from sdr2hdr.ai import HeuristicEnhancer, TorchMapEnhancer
 from sdr2hdr.core import ProcessorConfig, SDRToHDRProcessor
 from sdr2hdr.io import (
     ffprobe_video,
@@ -137,12 +137,7 @@ def build_request_config(request: ConversionRequest) -> tuple[ProcessorConfig, s
         config.processing_scale = request.processing_scale
     if request.fast_mode:
         config.fast_mode = True
-    if request.backend == "directml":
-        config.backend = "directml"
-    elif request.backend == "auto" and Path(request.model_path or "").suffix.lower() == ".onnx" and platform.system() == "Windows":
-        config.backend = "numpy"
-    else:
-        config.backend = request.backend
+    config.backend = request.backend
     profile = X265_PROFILE_DEFAULTS[request.x265_mode]
     x265_preset = request.x265_preset or profile["preset"]
     x265_crf = request.x265_crf if request.x265_crf is not None else profile["crf"]
@@ -162,7 +157,7 @@ def validate_request(request: ConversionRequest) -> None:
         raise ValueError("AI model is required. Select a model from the models folder.")
     model_path = Path(request.model_path)
     suffix = model_path.suffix.lower()
-    if suffix not in {".pt", ".onnx"}:
+    if suffix != ".pt":
         raise ValueError(f"Unsupported model format: {model_path.suffix}")
     if request.preset not in PRESETS:
         raise ValueError(f"Unknown preset: {request.preset}")
@@ -170,12 +165,8 @@ def validate_request(request: ConversionRequest) -> None:
         raise ValueError(f"Unknown x265 mode: {request.x265_mode}")
     if request.model_path and not model_path.exists():
         raise ValueError(f"Model file does not exist: {request.model_path}")
-    if request.backend == "directml" and suffix != ".onnx":
-        raise ValueError("DirectML requires an ONNX model (.onnx).")
     if request.backend in {"cuda", "mps", "torch-cpu", "numpy"} and suffix != ".pt":
         raise ValueError(f"Backend '{request.backend}' requires a TorchScript model (.pt).")
-    if request.backend == "auto" and suffix == ".onnx" and platform.system() != "Windows":
-        raise ValueError("ONNX DirectML models are only supported on Windows.")
 
 
 def resolve_model_device(request: ConversionRequest, torch_device: str | None) -> str:
@@ -185,12 +176,7 @@ def resolve_model_device(request: ConversionRequest, torch_device: str | None) -
 
 
 def resolve_model_backend(request: ConversionRequest, torch_device: str | None) -> str:
-    suffix = Path(request.model_path or "").suffix.lower()
-    if request.backend == "directml":
-        return "directml"
     if request.backend == "auto":
-        if suffix == ".onnx" and platform.system() == "Windows":
-            return "directml"
         if torch_device is not None:
             return torch_device
         return "numpy"
@@ -199,10 +185,8 @@ def resolve_model_backend(request: ConversionRequest, torch_device: str | None) 
     return request.backend
 
 
-def build_enhancer(request: ConversionRequest, torch_device: str | None) -> TorchMapEnhancer | OnnxDmlMapEnhancer:
+def build_enhancer(request: ConversionRequest, torch_device: str | None) -> TorchMapEnhancer:
     model_backend = resolve_model_backend(request, torch_device)
-    if model_backend == "directml":
-        return OnnxDmlMapEnhancer(request.model_path or "")
     return TorchMapEnhancer(
         request.model_path or "",
         device=resolve_model_device(request, torch_device if model_backend != "torch-cpu" else "cpu"),
