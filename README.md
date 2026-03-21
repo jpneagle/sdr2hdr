@@ -73,6 +73,17 @@ python -m sdr2hdr.cli input.mp4 output_hdr.mp4 --model-path models\enhancement_m
 python -m sdr2hdr.cli input.mp4 --model-path models\enhancement_model_20260310.pt
 ```
 
+### Sample Video
+
+YouTube comparison sample:
+
+[![SDR to HDR comparison sample](https://img.youtube.com/vi/2OFI6urxHxI/maxresdefault.jpg)](https://youtu.be/2OFI6urxHxI)
+
+The sample video compares:
+
+- Left: original SDR footage
+- Right: HDR output converted with `sdr2hdr`
+
 ### GUI
 
 #### Main Controls
@@ -247,6 +258,17 @@ If `output_path` is omitted, the tool automatically creates a name with `_hdr` a
 ```powershell
 python -m sdr2hdr.cli input.mp4 --model-path models\enhancement_model_20260310.pt
 ```
+
+### Sample Video
+
+YouTube 比較サンプル:
+
+[![SDR→HDR 比較サンプル](https://img.youtube.com/vi/2OFI6urxHxI/maxresdefault.jpg)](https://youtu.be/2OFI6urxHxI)
+
+このサンプル動画では次を比較しています。
+
+- 左: 元の SDR 映像
+- 右: `sdr2hdr` で変換した HDR 映像
 
 ### GUI
 

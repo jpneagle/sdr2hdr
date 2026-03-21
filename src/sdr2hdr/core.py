@@ -396,7 +396,7 @@ class SDRToHDRProcessor:
             if torch.backends.mps.is_available():
                 return "mps"
             return None
-        if torch.backends.mps.is_available():
+        if platform.system() == "Darwin" and torch.backends.mps.is_available():
             return "mps"
         if torch.cuda.is_available():
             return "cuda"

@@ -192,6 +192,39 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(processor._resolve_torch_device(), "cuda")
 
     @unittest.skipIf(torch is None, "torch not installed")
+    def test_linux_auto_backend_prefers_cuda(self) -> None:
+        with (
+            mock.patch("sdr2hdr.core.platform.system", return_value="Linux"),
+            mock.patch("sdr2hdr.core.torch.cuda.is_available", return_value=True),
+            mock.patch("sdr2hdr.core.torch.backends.mps.is_available", return_value=False),
+        ):
+            processor = SDRToHDRProcessor.__new__(SDRToHDRProcessor)
+            processor.config = ProcessorConfig(backend="auto")
+            self.assertEqual(processor._resolve_torch_device(), "cuda")
+
+    @unittest.skipIf(torch is None, "torch not installed")
+    def test_linux_auto_backend_cuda_not_blocked_by_mps(self) -> None:
+        with (
+            mock.patch("sdr2hdr.core.platform.system", return_value="Linux"),
+            mock.patch("sdr2hdr.core.torch.cuda.is_available", return_value=True),
+            mock.patch("sdr2hdr.core.torch.backends.mps.is_available", return_value=True),
+        ):
+            processor = SDRToHDRProcessor.__new__(SDRToHDRProcessor)
+            processor.config = ProcessorConfig(backend="auto")
+            self.assertEqual(processor._resolve_torch_device(), "cuda")
+
+    @unittest.skipIf(torch is None, "torch not installed")
+    def test_macos_auto_backend_prefers_mps_over_cuda(self) -> None:
+        with (
+            mock.patch("sdr2hdr.core.platform.system", return_value="Darwin"),
+            mock.patch("sdr2hdr.core.torch.cuda.is_available", return_value=True),
+            mock.patch("sdr2hdr.core.torch.backends.mps.is_available", return_value=True),
+        ):
+            processor = SDRToHDRProcessor.__new__(SDRToHDRProcessor)
+            processor.config = ProcessorConfig(backend="auto")
+            self.assertEqual(processor._resolve_torch_device(), "mps")
+
+    @unittest.skipIf(torch is None, "torch not installed")
     def test_cuda_backend_requires_cuda(self) -> None:
         with mock.patch("sdr2hdr.core.torch.cuda.is_available", return_value=False):
             processor = SDRToHDRProcessor.__new__(SDRToHDRProcessor)
