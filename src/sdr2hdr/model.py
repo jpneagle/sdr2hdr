@@ -58,8 +58,10 @@ class EnhancementUNet(nn.Module):
         self.enc1 = ConvBlock(3, 32, layers=1)
         self.enc2 = ConvBlock(32, 64, layers=2)
         self.enc3 = ConvBlock(64, 128, layers=2)
+        self.enc4 = ConvBlock(128, 256, layers=2)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.bottleneck = DepthwiseSeparableBottleneck(128, 256)
+        self.bottleneck = DepthwiseSeparableBottleneck(256, 512)
+        self.up4 = DecoderBlock(256 + 256, 128)
         self.up3 = DecoderBlock(128 + 128, 64)
         self.up2 = DecoderBlock(64 + 64, 32)
         self.up1 = DecoderBlock(32 + 32, 32)
@@ -69,10 +71,19 @@ class EnhancementUNet(nn.Module):
         enc1 = self.enc1(x)
         enc2 = self.enc2(self.pool(enc1))
         enc3 = self.enc3(self.pool(enc2))
-        bottleneck = self.bottleneck(self.pool(enc3))
+        enc4 = self.enc4(self.pool(enc3))
+        bottleneck = self.bottleneck(self.pool(enc4))
+
+        up4 = torch.nn.functional.interpolate(
+            bottleneck,
+            size=enc4.shape[-2:],
+            mode="bilinear",
+            align_corners=False,
+        )
+        up4 = self.up4(torch.cat([up4, enc4], dim=1))
 
         up3 = torch.nn.functional.interpolate(
-            bottleneck,
+            up4,
             size=enc3.shape[-2:],
             mode="bilinear",
             align_corners=False,

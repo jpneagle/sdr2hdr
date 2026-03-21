@@ -135,11 +135,17 @@ def augment_sdr(sdr_linear: np.ndarray, rng: random.Random) -> np.ndarray:
         luma = _compute_luma(augmented)
         clip_region = luma > threshold
         augmented[clip_region] *= threshold / np.maximum(luma[clip_region, None], 1e-4)
-    gamma = rng.uniform(0.9, 1.1)
+    gamma = rng.uniform(0.85, 1.15)
     augmented = np.power(np.clip(augmented, 0.0, 1.0), gamma)
-    if rng.random() < 0.3:
-        noise = np.random.default_rng(rng.randint(0, 2**31 - 1)).normal(0.0, 0.01, size=augmented.shape).astype(np.float32)
+    if rng.random() < 0.4:
+        noise = np.random.default_rng(rng.randint(0, 2**31 - 1)).normal(0.0, 0.02, size=augmented.shape).astype(np.float32)
         augmented = np.clip(augmented + noise, 0.0, 1.0)
+    if rng.random() < 0.2:
+        quality = rng.randint(70, 95)
+        srgb_u8 = np.clip(np.round(linear_to_srgb(augmented) * 255.0), 0, 255).astype(np.uint8)
+        _, encoded = cv2.imencode(".jpg", srgb_u8[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, quality])
+        decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)[..., ::-1].astype(np.float32) / 255.0
+        augmented = np.power(np.clip(decoded, 0.0, 1.0), 2.2)
     return augmented
 
 

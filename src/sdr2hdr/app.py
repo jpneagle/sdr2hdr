@@ -436,9 +436,10 @@ def _run_conversion_once(
         return result
     if processed == 0:
         raise RuntimeError("No frames were processed. Check the input path and video stream.")
+    measured_cll = processor.get_measured_max_cll()
     if request.verify_hdr_metadata and not has_expected_hdr_metadata(request.output_path):
         _emit_status(callbacks, "HDR metadata missing; repairing output tags")
-        restamp_hdr_metadata(request.output_path)
+        restamp_hdr_metadata(request.output_path, max_cll=measured_cll)
     result = ConversionResult(output_path=request.output_path, processed_frames=processed, total_frames=total_frames)
     _emit_status(callbacks, "Completed")
     _emit_complete(callbacks, result)

@@ -33,16 +33,17 @@ def total_variation_loss(tensor: torch.Tensor) -> torch.Tensor:
 
 
 def compute_loss(pred: torch.Tensor, target_maps: torch.Tensor, clip_mask: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    smooth_l1 = nn.SmoothL1Loss(reduction="none", beta=0.1)
     confidence = 1.0 - clip_mask * 0.8
     pred_exp, pred_con, pred_pro = pred[:, 0:1], pred[:, 1:2], pred[:, 2:3]
     tgt_exp, tgt_con, tgt_pro = target_maps[:, 0:1], target_maps[:, 1:2], target_maps[:, 2:3]
     protected_weight = 1.0 + torch.clamp(tgt_pro, min=0.0) * 1.5
     overdrive = torch.clamp(pred_exp - tgt_exp, min=0.0)
-    l_exp = (confidence * protected_weight * torch.abs(pred_exp - tgt_exp)).mean() + (protected_weight * overdrive).mean() * 0.5
-    l_con = (confidence * (1.0 + torch.clamp(tgt_pro, min=0.0)) * torch.abs(pred_con - tgt_con)).mean()
-    l_pro = torch.abs(pred_pro - tgt_pro).mean()
-    l_tv = total_variation_loss(pred_exp) * 0.01
-    total = 1.0 * l_exp + 0.5 * l_con + 0.75 * l_pro + l_tv
+    l_exp = (confidence * protected_weight * smooth_l1(pred_exp, tgt_exp)).mean() + (protected_weight * overdrive).mean() * 0.8
+    l_con = (confidence * (1.0 + torch.clamp(tgt_pro, min=0.0)) * smooth_l1(pred_con, tgt_con)).mean()
+    l_pro = smooth_l1(pred_pro, tgt_pro).mean()
+    l_tv = total_variation_loss(pred_exp) * 0.03
+    total = 0.8 * l_exp + 0.4 * l_con + 1.0 * l_pro + l_tv
     return total, {"exp": l_exp, "con": l_con, "pro": l_pro, "tv": l_tv}
 
 

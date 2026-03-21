@@ -124,10 +124,14 @@ def open_encoder(
     encoder: str = "hevc_videotoolbox",
     x265_preset: str = "medium",
     x265_crf: int = 16,
+    max_cll_override: tuple[int, int] | None = None,
 ) -> subprocess.Popen[bytes]:
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     mastering = "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
-    max_cll = f"{int(peak_nits)},{max(int(peak_nits * 0.4), 1)}"
+    if max_cll_override is not None:
+        max_cll = f"{max_cll_override[0]},{max_cll_override[1]}"
+    else:
+        max_cll = f"{int(peak_nits)},{max(int(peak_nits * 0.4), 1)}"
     cmd = [
         "ffmpeg",
         "-y",
@@ -270,7 +274,7 @@ def quote_command(args: list[str]) -> str:
     return " ".join(shlex.quote(arg) for arg in args)
 
 
-def restamp_hdr_metadata(path: str) -> None:
+def restamp_hdr_metadata(path: str, max_cll: tuple[int, int] | None = None) -> None:
     source = Path(path)
     if not source.exists():
         return

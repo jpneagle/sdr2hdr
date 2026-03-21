@@ -30,12 +30,12 @@ def estimate_skin_mask(frame_linear: np.ndarray) -> np.ndarray:
     rn = r / sum_rgb
     gn = g / sum_rgb
     skin = (
-        (rn > 0.36)
+        (rn > 0.32)
         & (rn < 0.55)
-        & (gn > 0.25)
-        & (gn < 0.40)
+        & (gn > 0.24)
+        & (gn < 0.42)
         & (r > b)
-        & (g > b * 0.9)
+        & (g > b * 0.85)
     )
     return skin.astype(np.float32)
 
@@ -43,8 +43,13 @@ def estimate_skin_mask(frame_linear: np.ndarray) -> np.ndarray:
 def estimate_subtitle_mask(frame_bgr8: np.ndarray, luma: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(frame_bgr8, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
     height, width = gray.shape
-    lower_band = np.zeros_like(gray, dtype=np.float32)
-    lower_band[int(height * 0.72) :, :] = 1.0
+    band_start = int(height * 0.68)
+    band_full = int(height * 0.76)
+    lower_band = np.zeros(height, dtype=np.float32)
+    ramp_len = max(band_full - band_start, 1)
+    lower_band[band_start:band_full] = np.linspace(0.0, 1.0, ramp_len, dtype=np.float32)
+    lower_band[band_full:] = 1.0
+    lower_band = lower_band[:, None] * np.ones(width, dtype=np.float32)[None, :]
     bright = (gray > 0.82).astype(np.float32)
     low_chroma = (np.std(frame_bgr8.astype(np.float32) / 255.0, axis=2) < 0.08).astype(np.float32)
     local_contrast = cv2.Laplacian(gray, cv2.CV_32F, ksize=3)
@@ -57,7 +62,7 @@ def estimate_subtitle_mask(frame_bgr8: np.ndarray, luma: np.ndarray) -> np.ndarr
 
 def estimate_subtitle_mask_fast(frame_bgr8: np.ndarray, luma: np.ndarray) -> np.ndarray:
     height, width = luma.shape
-    band_start = int(height * 0.72)
+    band_start = int(height * 0.68)
     gray = cv2.cvtColor(frame_bgr8, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
     gray_band = gray[band_start:, :]
     luma_band = luma[band_start:, :]
@@ -74,8 +79,13 @@ def estimate_subtitle_mask_fast(frame_bgr8: np.ndarray, luma: np.ndarray) -> np.
     kernel = np.ones((3, 3), np.uint8)
     dilated = cv2.dilate((mask_small > 0).astype(np.uint8), kernel, iterations=1).astype(np.float32)
     mask_band = cv2.resize(dilated, (width, height - band_start), interpolation=cv2.INTER_LINEAR)
+    band_full = int(height * 0.76)
+    ramp_rows = band_full - band_start
+    fade = np.ones(height - band_start, dtype=np.float32)
+    if ramp_rows > 0:
+        fade[:ramp_rows] = np.linspace(0.0, 1.0, ramp_rows, dtype=np.float32)
     mask = np.zeros_like(gray, dtype=np.float32)
-    mask[band_start:, :] = np.clip(mask_band, 0.0, 1.0)
+    mask[band_start:, :] = np.clip(mask_band * fade[:, None], 0.0, 1.0)
     return mask
 
 
