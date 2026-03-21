@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from sdr2hdr.constants import LUMA_R, LUMA_G, LUMA_B
+
 try:
     import torch
     import torch.nn.functional as F
@@ -22,9 +24,9 @@ class EnhancementMaps:
 
 def estimate_heuristic_maps(frame_linear: np.ndarray) -> EnhancementMaps:
     luminance = np.clip(
-        0.2627 * frame_linear[..., 0]
-        + 0.6780 * frame_linear[..., 1]
-        + 0.0593 * frame_linear[..., 2],
+        LUMA_R * frame_linear[..., 0]
+        + LUMA_G * frame_linear[..., 1]
+        + LUMA_B * frame_linear[..., 2],
         0.0,
         1.0,
     )
@@ -73,7 +75,7 @@ class TorchMapEnhancer(BaseEnhancer):
 
     def _heuristic_maps_torch(self, frame_linear_t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         luminance = torch.clamp(
-            frame_linear_t[..., 0] * 0.2627 + frame_linear_t[..., 1] * 0.6780 + frame_linear_t[..., 2] * 0.0593,
+            frame_linear_t[..., 0] * LUMA_R + frame_linear_t[..., 1] * LUMA_G + frame_linear_t[..., 2] * LUMA_B,
             0.0,
             1.0,
         )
