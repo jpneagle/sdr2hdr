@@ -1,6 +1,7 @@
+import argparse
 import unittest
 
-from sdr2hdr.cli import build_parser
+from sdr2hdr.cli import build_parser, parse_resolution
 
 
 class CLIParserTests(unittest.TestCase):
@@ -17,6 +18,11 @@ class CLIParserTests(unittest.TestCase):
         self.assertEqual(args.x265_mode, "balanced")
         self.assertEqual(args.backend, "auto")
         self.assertEqual(args.ai_strength, 0.25)
+        self.assertEqual(args.upscale_engine, "ffmpeg")
+        self.assertEqual(args.output_scale, 1.0)
+        self.assertIsNone(args.target_resolution)
+        self.assertEqual(args.scaler, "lanczos")
+        self.assertEqual(args.rtx_video_quality, "high")
         self.assertFalse(args.no_fallback_to_x265_on_hardware_error)
         self.assertFalse(args.discard_partial_output_on_cancel)
 
@@ -55,6 +61,26 @@ class CLIParserTests(unittest.TestCase):
         parser = build_parser()
         args = parser.parse_args(["input.mp4", "--model-path", "m.pt", "--ai-strength", "0.6"])
         self.assertAlmostEqual(args.ai_strength, 0.6)
+
+    def test_high_resolution_options(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "input.mp4",
+            "--model-path", "m.pt",
+            "--upscale-engine", "rtx-video",
+            "--output-scale", "2.0",
+            "--scaler", "bicubic",
+            "--rtx-video-quality", "ultra",
+        ])
+        self.assertEqual(args.upscale_engine, "rtx-video")
+        self.assertEqual(args.output_scale, 2.0)
+        self.assertEqual(args.scaler, "bicubic")
+        self.assertEqual(args.rtx_video_quality, "ultra")
+
+    def test_target_resolution_parser(self) -> None:
+        self.assertEqual(parse_resolution("3840x2160"), (3840, 2160))
+        with self.assertRaises(argparse.ArgumentTypeError):
+            parse_resolution("3840")
 
 
 if __name__ == "__main__":

@@ -216,6 +216,8 @@ def _torch_compile_available() -> bool:
 
 
 class SDRToHDRProcessor:
+    _PINNED_POOL_SIZE = 6
+
     def __init__(self, config: ProcessorConfig, enhancer: BaseEnhancer | None = None) -> None:
         self.config = config
         self.enhancer = enhancer or HeuristicEnhancer()
@@ -231,6 +233,17 @@ class SDRToHDRProcessor:
         self._sum_mean_pq: float = 0.0
         self._frame_count: int = 0
         self._dither_rng = np.random.default_rng(0)
+        self._pinned_rgb_t: torch.Tensor | None = None
+        self._pinned_rgb_shape: tuple[int, ...] | None = None
+        # Rotating pool (not a single buffer) for the uint16 PQ output: the
+        # array handed back from process_frame/process_frame_tensor is queued
+        # to the encoder thread (queue maxsize=3), so a frame's buffer must
+        # stay untouched until that thread has read it. Rotating through
+        # several buffers instead of reusing one keeps frame N's data intact
+        # while frame N+1..N+k are in flight.
+        self._pinned_pq_pool: list[torch.Tensor] = []
+        self._pinned_pq_shape: tuple[int, ...] | None = None
+        self._pinned_pq_idx: int = 0
         if torch is not None and self.torch_device is not None:
             self._rec2020_t = torch.from_numpy(REC709_TO_REC2020).to(self.torch_device, dtype=torch.float32)
             self._laplacian_kernel_t = torch.tensor(
@@ -329,9 +342,15 @@ class SDRToHDRProcessor:
 
     def _tensor_from_rgb(self, frame_rgb: np.ndarray) -> torch.Tensor:
         assert torch is not None
-        t = torch.from_numpy(frame_rgb)
         if self._is_cuda:
-            return t.pin_memory().to(self.torch_device, dtype=torch.float32, non_blocking=True)
+            # Reuse a persistent page-locked staging buffer instead of calling
+            # pin_memory() (which allocates fresh pinned memory) on every frame.
+            if self._pinned_rgb_t is None or self._pinned_rgb_shape != frame_rgb.shape:
+                self._pinned_rgb_t = torch.empty(frame_rgb.shape, dtype=torch.float32, pin_memory=True)
+                self._pinned_rgb_shape = frame_rgb.shape
+            self._pinned_rgb_t.copy_(torch.from_numpy(frame_rgb))
+            return self._pinned_rgb_t.to(self.torch_device, dtype=torch.float32, non_blocking=True)
+        t = torch.from_numpy(frame_rgb)
         return t.to(self.torch_device, dtype=torch.float32)
 
     def _torch_compute_luma(self, frame_linear: torch.Tensor) -> torch.Tensor:
@@ -619,6 +638,33 @@ class SDRToHDRProcessor:
 
         frame_rgb = work_bgr8[..., ::-1].astype(np.float32) / 255.0
         frame_rgb_t = self._tensor_from_rgb(frame_rgb)
+        return self._process_device_tensor(frame_rgb_t, original_height, original_width)
+
+    def process_frame_tensor(self, frame_rgb_t: torch.Tensor) -> np.ndarray:
+        """Run the HDR pipeline on a frame that is already an on-device HWC RGB
+        float32 [0,1] tensor (e.g. straight off RtxVideoUpscaler.upscale_tensor),
+        skipping the GPU roundtrip that process_frame's numpy entry point needs.
+        """
+        assert torch is not None
+        assert F is not None
+        with torch.inference_mode():
+            original_height, original_width = frame_rgb_t.shape[:2]
+            if self.config.processing_scale < 0.999:
+                scaled_height, scaled_width = self._get_scaled_shape(original_height, original_width)
+                # GPU counterpart of the CPU cv2.resize(..., INTER_AREA) used by
+                # the numpy path; mode="area" matches INTER_AREA semantics.
+                frame_rgb_t = F.interpolate(
+                    frame_rgb_t.permute(2, 0, 1)[None],
+                    size=(scaled_height, scaled_width),
+                    mode="area",
+                ).squeeze(0).permute(1, 2, 0)
+            return self._process_device_tensor(frame_rgb_t, original_height, original_width)
+
+    def _process_device_tensor(
+        self, frame_rgb_t: torch.Tensor, original_height: int, original_width: int
+    ) -> np.ndarray:
+        assert torch is not None
+        work_height, work_width = frame_rgb_t.shape[:2]
         frame_linear_t = self._torch_decode_to_linear(frame_rgb_t)
         luma_t = torch.clamp(self._torch_compute_luma(frame_linear_t), 0.0, 1.0)
         chroma_t = self._torch_compute_chroma(frame_linear_t)
@@ -766,7 +812,7 @@ class SDRToHDRProcessor:
         )
 
         relit_luma_t = torch.clamp(self._torch_compute_luma(frame_linear_t), 0.0, 2.0)
-        detail_scale = max(work_bgr8.shape[0], work_bgr8.shape[1]) / 1920.0
+        detail_scale = max(work_height, work_width) / 1920.0
         detail_kernel = max(3, int(5 * detail_scale) | 1)  # ensure odd
         detail_base = self._torch_blur(relit_luma_t, detail_kernel)
         detail = relit_luma_t - detail_base
@@ -789,7 +835,7 @@ class SDRToHDRProcessor:
             scene_cut,
         )
         frame_linear_t = torch.clamp(frame_linear_t * relight[..., None], 0.0, 4.0)
-        if work_bgr8.shape[:2] != (original_height, original_width):
+        if (work_height, work_width) != (original_height, original_width):
             frame_linear_t = F.interpolate(
                 frame_linear_t.permute(2, 0, 1)[None],
                 size=(original_height, original_width),
@@ -800,9 +846,30 @@ class SDRToHDRProcessor:
         assert self._rec2020_t is not None
         frame_2020_t = torch.clamp(torch.matmul(frame_linear_t, self._rec2020_t.T), min=0.0)
         frame_pq_t = self._torch_apply_dither(self._torch_linear_to_pq(frame_2020_t))
-        frame_16 = torch.clamp(torch.round(frame_pq_t * 65535.0), 0, 65535).to(torch.uint16).cpu().numpy()
+        frame_16_t = torch.clamp(torch.round(frame_pq_t * 65535.0), 0, 65535).to(torch.uint16)
+        frame_16 = self._to_pinned_output(frame_16_t) if self._is_cuda else frame_16_t.cpu().numpy()
         self._update_pq_stats(frame_16)
         return frame_16
+
+    def _to_pinned_output(self, frame_16_t: torch.Tensor) -> np.ndarray:
+        # Copies the GPU uint16 PQ frame into a page-locked staging buffer
+        # (faster D2H transfer than the default pageable cpu() allocation),
+        # rotating through a small pool so an in-flight frame's memory is
+        # never overwritten by a later frame before the encoder thread has
+        # consumed it. The copy is a blocking (non_blocking=False) copy_(),
+        # so the returned array is fully valid the moment this returns.
+        assert torch is not None
+        shape = tuple(frame_16_t.shape)
+        if self._pinned_pq_shape != shape or not self._pinned_pq_pool:
+            self._pinned_pq_pool = [
+                torch.empty(shape, dtype=torch.uint16, pin_memory=True) for _ in range(self._PINNED_POOL_SIZE)
+            ]
+            self._pinned_pq_shape = shape
+            self._pinned_pq_idx = 0
+        buf = self._pinned_pq_pool[self._pinned_pq_idx]
+        self._pinned_pq_idx = (self._pinned_pq_idx + 1) % len(self._pinned_pq_pool)
+        buf.copy_(frame_16_t)
+        return buf.numpy()
 
     def process_frame(self, frame_bgr8: np.ndarray) -> np.ndarray:
         if self.torch_device is not None:

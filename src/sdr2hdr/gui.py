@@ -18,7 +18,10 @@ from sdr2hdr.app import (
     HDR_STYLE_DEFAULTS,
     INPUT_EOTF_OPTIONS,
     PRESETS,
+    RTX_VIDEO_QUALITY_OPTIONS,
+    SCALER_OPTIONS,
     TONE_DIFFUSE_WHITE,
+    UPSCALE_ENGINE_OPTIONS,
     X265_PROFILE_DEFAULTS,
     build_output_path,
     default_encoder_for_platform,
@@ -30,6 +33,27 @@ X265_MODE_OPTIONS = {
     "preview": "Preview (Fast)",
     "balanced": "Balanced",
     "final": "Final (Best Quality)",
+}
+OUTPUT_SCALE_OPTIONS = {
+    "Source": 1.0,
+    "2x": 2.0,
+    "4x": 4.0,
+    "Custom": 1.0,
+}
+SCALER_LABELS = {
+    "lanczos": "Lanczos (Sharp)",
+    "bicubic": "Bicubic",
+    "bilinear": "Bilinear (Fast)",
+}
+UPSCALE_ENGINE_LABELS = {
+    "ffmpeg": "FFmpeg Scaler",
+    "rtx-video": "RTX Video SDK",
+}
+RTX_VIDEO_QUALITY_LABELS = {
+    "low": "Low (Fast)",
+    "medium": "Medium",
+    "high": "High (Recommended)",
+    "ultra": "Ultra (Slowest)",
 }
 
 def resolve_models_dir() -> Path:
@@ -53,11 +77,32 @@ def resolve_models_dir() -> Path:
 MODELS_DIR = resolve_models_dir()
 
 
-def describe_mode_hint(encoder: str, mode: str, backend: str, preset: str, model_path: str) -> str:
+def describe_mode_hint(
+    encoder: str,
+    mode: str,
+    backend: str,
+    preset: str,
+    model_path: str,
+    output_scale: float = 1.0,
+    scaler: str = "lanczos",
+    target_width: int | None = None,
+    target_height: int | None = None,
+    upscale_engine: str = "ffmpeg",
+) -> str:
+    engine_name = "RTX Video SDK" if upscale_engine == "rtx-video" else "FFmpeg"
+    if target_width is not None and target_height is not None:
+        upscale_hint = f" {engine_name} output {target_width}x{target_height}."
+    elif output_scale > 1.0001:
+        if upscale_engine == "rtx-video":
+            upscale_hint = f" RTX Video SDK SR {output_scale:g}x."
+        else:
+            upscale_hint = f" Output scaled {output_scale:g}x with {scaler}."
+    else:
+        upscale_hint = ""
     if encoder == "hevc_videotoolbox":
-        return "Fastest on supported Macs. Falls back to libx265 if VideoToolbox fails."
+        return "Fastest on supported Macs. Falls back to libx265 if VideoToolbox fails." + upscale_hint
     if encoder == "hevc_nvenc":
-        return "Fastest on supported NVIDIA GPUs. Falls back to libx265 if NVENC fails."
+        return "Fastest on supported NVIDIA GPUs. Falls back to libx265 if NVENC fails." + upscale_hint
     if mode == "preview":
         speed = "Fastest x265 mode, lower compression efficiency."
     elif mode == "final":
@@ -66,15 +111,15 @@ def describe_mode_hint(encoder: str, mode: str, backend: str, preset: str, model
         speed = "Balanced x265 mode for daily use."
     if model_path.strip():
         if backend == "cuda":
-            return speed + " Learned-map mode enabled on NVIDIA GPU."
+            return speed + " Learned-map mode enabled on NVIDIA GPU." + upscale_hint
         if backend == "mps":
-            return speed + " Learned-map mode enabled on Apple GPU."
-        return speed + " Learned-map mode enabled."
+            return speed + " Learned-map mode enabled on Apple GPU." + upscale_hint
+        return speed + " Learned-map mode enabled." + upscale_hint
     if backend == "mps":
-        return speed + " Uses Apple GPU."
+        return speed + " Uses Apple GPU." + upscale_hint
     if backend == "cuda":
-        return speed + " Uses NVIDIA GPU for processing."
-    return speed
+        return speed + " Uses NVIDIA GPU for processing." + upscale_hint
+    return speed + upscale_hint
 
 
 def format_ai_strength(value: float) -> str:
@@ -155,6 +200,11 @@ CONTROL_TOOLTIPS = {
     "hdr_style": "Highlight/shadow character of the result:\nnatural (balanced), cinematic (stronger highlights), night (restrained shadows).",
     "tone": "Brightness anchoring.\nvivid: bright, punchy HDR look (default).\nreference: BT.2408 standard with SDR white at 203 nits - subtler, closer to broadcast grading.",
     "input_eotf": "How the SDR input is decoded. Pick by source, not by taste:\nbt1886 for TV/broadcast/camera video, srgb for PC or web content.",
+    "upscale_engine": "High-resolution engine.\nFFmpeg scales after HDR conversion. RTX Video SDK runs super resolution before HDR conversion.",
+    "output_scale": "Output resolution scaling.\nSource keeps the original size. 2x turns 1080p into 4K. Custom uses Target Size.",
+    "target_size": "Exact output resolution for Custom output size.\nUse even dimensions for HEVC, for example 3840 x 2160.",
+    "scaler": "FFmpeg resize algorithm for high-resolution output.\nLanczos is sharpest, bilinear is fastest.",
+    "rtx_video_quality": "RTX Video Super Resolution quality.\nHigher levels favor detail preservation over speed. Requires an RTX GPU with the NVIDIA RTX Video SDK (nvidia-vfx) installed.",
 }
 
 
@@ -199,7 +249,7 @@ class SDR2HDRGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("sdr2hdr")
-        self.root.geometry("1120x720")
+        self.root.geometry("1160x820")
         self.state = AppState.IDLE
         self.event_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.worker: threading.Thread | None = None
@@ -224,6 +274,12 @@ class SDR2HDRGUI:
         # decode default since inputs are typically video sources.
         self.tone_var = tk.StringVar(value="vivid")
         self.input_eotf_var = tk.StringVar(value="bt1886")
+        self.upscale_engine_var = tk.StringVar(value=UPSCALE_ENGINE_LABELS["ffmpeg"])
+        self.output_scale_var = tk.StringVar(value="Source")
+        self.target_width_var = tk.StringVar(value="3840")
+        self.target_height_var = tk.StringVar(value="2160")
+        self.scaler_var = tk.StringVar(value=SCALER_LABELS["lanczos"])
+        self.rtx_video_quality_var = tk.StringVar(value=RTX_VIDEO_QUALITY_LABELS["high"])
         self.encoder_var = tk.StringVar(value=self.encoder_options[default_encoder])
         self.x265_mode_var = tk.StringVar(value=X265_MODE_OPTIONS["balanced"])
         self.backend_var = tk.StringVar(value=self.backend_options["auto"])
@@ -277,24 +333,66 @@ class SDR2HDRGUI:
         self.hdr_style_combo = self._add_combo_row(form, 3, "HDR Style", self.hdr_style_var, list(HDR_STYLE_DEFAULTS))
         self.tone_combo = self._add_combo_row(form, 4, "Tone", self.tone_var, list(TONE_DIFFUSE_WHITE))
         self.input_eotf_combo = self._add_combo_row(form, 5, "Input EOTF", self.input_eotf_var, list(INPUT_EOTF_OPTIONS))
+        self.upscale_engine_combo = self._add_combo_row(
+            form,
+            6,
+            "Upscale Engine",
+            self.upscale_engine_var,
+            [UPSCALE_ENGINE_LABELS[key] for key in UPSCALE_ENGINE_OPTIONS],
+        )
+        self.output_scale_combo = self._add_combo_row(
+            form,
+            7,
+            "Output Size",
+            self.output_scale_var,
+            list(OUTPUT_SCALE_OPTIONS),
+        )
+        target_row = ttk.Frame(form)
+        target_row.grid(row=8, column=1, sticky="w", pady=6)
+        self.target_width_entry = ttk.Entry(target_row, textvariable=self.target_width_var, width=8)
+        self.target_width_entry.grid(row=0, column=0, sticky="w")
+        ttk.Label(target_row, text="x").grid(row=0, column=1, padx=6)
+        self.target_height_entry = ttk.Entry(target_row, textvariable=self.target_height_var, width=8)
+        self.target_height_entry.grid(row=0, column=2, sticky="w")
+        ttk.Label(form, text="Target Size").grid(row=8, column=0, sticky="w", pady=6, padx=(0, 12))
+        self.scaler_combo = self._add_combo_row(
+            form,
+            9,
+            "Scaler",
+            self.scaler_var,
+            [SCALER_LABELS[key] for key in SCALER_OPTIONS],
+        )
+        self.rtx_video_quality_combo = self._add_combo_row(
+            form,
+            10,
+            "RTX Quality",
+            self.rtx_video_quality_var,
+            [RTX_VIDEO_QUALITY_LABELS[key] for key in RTX_VIDEO_QUALITY_OPTIONS],
+        )
         Tooltip(self.preset_combo, CONTROL_TOOLTIPS["preset"])
         Tooltip(self.hdr_style_combo, CONTROL_TOOLTIPS["hdr_style"])
         Tooltip(self.tone_combo, CONTROL_TOOLTIPS["tone"])
         Tooltip(self.input_eotf_combo, CONTROL_TOOLTIPS["input_eotf"])
-        self.encoder_combo = self._add_combo_row(form, 6, "Encoder", self.encoder_var, list(self.encoder_options.values()))
-        self.x265_combo = self._add_combo_row(form, 7, "Speed/Quality", self.x265_mode_var, list(X265_MODE_OPTIONS.values()))
-        self.backend_combo = self._add_combo_row(form, 8, "Backend", self.backend_var, list(self.backend_options.values()))
+        Tooltip(self.upscale_engine_combo, CONTROL_TOOLTIPS["upscale_engine"])
+        Tooltip(self.output_scale_combo, CONTROL_TOOLTIPS["output_scale"])
+        Tooltip(self.target_width_entry, CONTROL_TOOLTIPS["target_size"])
+        Tooltip(self.target_height_entry, CONTROL_TOOLTIPS["target_size"])
+        Tooltip(self.scaler_combo, CONTROL_TOOLTIPS["scaler"])
+        Tooltip(self.rtx_video_quality_combo, CONTROL_TOOLTIPS["rtx_video_quality"])
+        self.encoder_combo = self._add_combo_row(form, 11, "Encoder", self.encoder_var, list(self.encoder_options.values()))
+        self.x265_combo = self._add_combo_row(form, 12, "Speed/Quality", self.x265_mode_var, list(X265_MODE_OPTIONS.values()))
+        self.backend_combo = self._add_combo_row(form, 13, "Backend", self.backend_var, list(self.backend_options.values()))
         self.model_combo = self._add_combo_row(
             form,
-            9,
+            14,
             "AI Model",
             self.model_name_var,
             [path.name for path in self.filtered_models] or ["No compatible models"],
         )
-        ttk.Button(form, text="Refresh", command=self._refresh_available_models).grid(row=9, column=2, padx=(8, 0))
-        ttk.Label(form, text="AI Strength").grid(row=10, column=0, sticky="w", pady=6, padx=(0, 12))
+        ttk.Button(form, text="Refresh", command=self._refresh_available_models).grid(row=14, column=2, padx=(8, 0))
+        ttk.Label(form, text="AI Strength").grid(row=15, column=0, sticky="w", pady=6, padx=(0, 12))
         slider_row = ttk.Frame(form)
-        slider_row.grid(row=10, column=1, sticky="ew", pady=6)
+        slider_row.grid(row=15, column=1, sticky="ew", pady=6)
         slider_row.columnconfigure(0, weight=1)
         self.ai_strength_scale = ttk.Scale(
             slider_row,
@@ -306,7 +404,7 @@ class SDR2HDRGUI:
         )
         self.ai_strength_scale.grid(row=0, column=0, sticky="ew")
         ttk.Label(slider_row, textvariable=self.ai_strength_label_var, width=5).grid(row=0, column=1, padx=(8, 0))
-        ttk.Label(form, textvariable=self.mode_hint_var).grid(row=11, column=1, sticky="w", pady=(4, 0))
+        ttk.Label(form, textvariable=self.mode_hint_var).grid(row=16, column=1, sticky="w", pady=(4, 0))
 
         controls = ttk.Frame(left)
         controls.grid(row=1, column=0, sticky="ew", pady=(16, 12))
@@ -356,6 +454,12 @@ class SDR2HDRGUI:
         self.x265_mode_var.trace_add("write", self._sync_mode_hint)
         self.backend_var.trace_add("write", self._sync_mode_hint)
         self.backend_var.trace_add("write", self._refresh_model_choices)
+        self.upscale_engine_var.trace_add("write", self._sync_upscale_ui)
+        self.output_scale_var.trace_add("write", self._sync_resolution_ui)
+        self.target_width_var.trace_add("write", self._sync_mode_hint)
+        self.target_height_var.trace_add("write", self._sync_mode_hint)
+        self.scaler_var.trace_add("write", self._sync_mode_hint)
+        self.rtx_video_quality_var.trace_add("write", self._sync_mode_hint)
         self.preset_var.trace_add("write", self._sync_mode_hint)
         self.hdr_style_var.trace_add("write", self._sync_mode_hint)
         self.model_name_var.trace_add("write", self._sync_selected_model)
@@ -365,6 +469,8 @@ class SDR2HDRGUI:
         self._refresh_model_choices()
         self._sync_selected_model()
         self._sync_model_controls()
+        self._sync_upscale_ui()
+        self._sync_resolution_ui()
         self._sync_mode_hint()
         self._refresh_job_list()
 
@@ -411,6 +517,7 @@ class SDR2HDRGUI:
         self._sync_mode_hint()
 
     def _sync_mode_hint(self, *_: object) -> None:
+        target_width, target_height = self._target_resolution_preview()
         self.mode_hint_var.set(
             describe_mode_hint(
                 self._selected_encoder(),
@@ -418,8 +525,27 @@ class SDR2HDRGUI:
                 self._selected_backend(),
                 self.preset_var.get(),
                 self.model_path_var.get(),
+                self._selected_output_scale(),
+                self._selected_scaler(),
+                target_width,
+                target_height,
+                self._selected_upscale_engine(),
             )
         )
+
+    def _sync_upscale_ui(self, *_: object) -> None:
+        running = getattr(self, "state", AppState.IDLE) in {AppState.RUNNING, AppState.CANCELLING}
+        uses_rtx = self._selected_upscale_engine() == "rtx-video"
+        self.rtx_video_quality_combo.configure(state="readonly" if uses_rtx and not running else "disabled")
+        self.scaler_combo.configure(state="disabled" if uses_rtx or running else "readonly")
+        self._sync_mode_hint()
+
+    def _sync_resolution_ui(self, *_: object) -> None:
+        running = getattr(self, "state", AppState.IDLE) in {AppState.RUNNING, AppState.CANCELLING}
+        entry_state = "normal" if self._uses_custom_output_size() and not running else "disabled"
+        self.target_width_entry.configure(state=entry_state)
+        self.target_height_entry.configure(state=entry_state)
+        self._sync_mode_hint()
 
     def _sync_selected_model(self, *_: object) -> None:
         selected_name = self.model_name_var.get().strip()
@@ -457,6 +583,55 @@ class SDR2HDRGUI:
             if self.backend_var.get() == label:
                 return key
         return "auto"
+
+    def _selected_upscale_engine(self) -> str:
+        selected = self.upscale_engine_var.get()
+        for key, label in UPSCALE_ENGINE_LABELS.items():
+            if selected == label:
+                return key
+        return "ffmpeg"
+
+    def _selected_output_scale(self) -> float:
+        if self._uses_custom_output_size():
+            return 1.0
+        return OUTPUT_SCALE_OPTIONS.get(self.output_scale_var.get(), 1.0)
+
+    def _uses_custom_output_size(self) -> bool:
+        return self.output_scale_var.get() == "Custom"
+
+    def _parse_target_resolution(self, strict: bool) -> tuple[int | None, int | None]:
+        if not self._uses_custom_output_size():
+            return None, None
+        width_text = self.target_width_var.get().strip()
+        height_text = self.target_height_var.get().strip()
+        try:
+            width = int(width_text)
+            height = int(height_text)
+        except ValueError as exc:
+            if strict:
+                raise ValueError("Target size must be numeric.") from exc
+            return None, None
+        return width, height
+
+    def _selected_target_resolution(self) -> tuple[int | None, int | None]:
+        return self._parse_target_resolution(strict=True)
+
+    def _target_resolution_preview(self) -> tuple[int | None, int | None]:
+        return self._parse_target_resolution(strict=False)
+
+    def _selected_scaler(self) -> str:
+        selected = self.scaler_var.get()
+        for key, label in SCALER_LABELS.items():
+            if selected == label:
+                return key
+        return "lanczos"
+
+    def _selected_rtx_video_quality(self) -> str:
+        selected = self.rtx_video_quality_var.get()
+        for key, label in RTX_VIDEO_QUALITY_LABELS.items():
+            if selected == label:
+                return key
+        return "high"
 
     def _browse_input(self) -> None:
         path = filedialog.askopenfilename(title="Select input video")
@@ -500,6 +675,7 @@ class SDR2HDRGUI:
         self.log.configure(state="disabled")
 
     def _build_request(self) -> ConversionRequest:
+        target_width, target_height = self._selected_target_resolution()
         return ConversionRequest(
             input_path=self.input_var.get().strip(),
             output_path=self.output_var.get().strip(),
@@ -510,6 +686,12 @@ class SDR2HDRGUI:
             encoder=self._selected_encoder(),
             x265_mode=self._selected_x265_mode(),
             backend=self._selected_backend(),
+            upscale_engine=self._selected_upscale_engine(),
+            output_scale=self._selected_output_scale(),
+            target_width=target_width,
+            target_height=target_height,
+            scaler=self._selected_scaler(),
+            rtx_video_quality=self._selected_rtx_video_quality(),
             model_path=self.model_path_var.get().strip() or None,
             ai_strength=self.ai_strength_var.get() if self.model_path_var.get().strip() else None,
             device="auto",
@@ -565,6 +747,11 @@ class SDR2HDRGUI:
         paths = filedialog.askopenfilenames(title="Select input videos")
         if not paths:
             return
+        try:
+            target_width, target_height = self._selected_target_resolution()
+        except ValueError as exc:
+            messagebox.showerror("Cannot queue", str(exc))
+            return
         for raw_path in paths:
             input_path = str(raw_path)
             output_path = build_output_path(input_path)
@@ -578,6 +765,12 @@ class SDR2HDRGUI:
                 encoder=self._selected_encoder(),
                 x265_mode=self._selected_x265_mode(),
                 backend=self._selected_backend(),
+                upscale_engine=self._selected_upscale_engine(),
+                output_scale=self._selected_output_scale(),
+                target_width=target_width,
+                target_height=target_height,
+                scaler=self._selected_scaler(),
+                rtx_video_quality=self._selected_rtx_video_quality(),
                 model_path=self.model_path_var.get().strip() or None,
                 ai_strength=self.ai_strength_var.get() if self.model_path_var.get().strip() else None,
                 device="auto",
@@ -697,6 +890,10 @@ class SDR2HDRGUI:
         self.hdr_style_combo.configure(state=combo_state)
         self.tone_combo.configure(state=combo_state)
         self.input_eotf_combo.configure(state=combo_state)
+        self.upscale_engine_combo.configure(state=combo_state)
+        self.output_scale_combo.configure(state=combo_state)
+        self._sync_resolution_ui()
+        self._sync_upscale_ui()
         self.encoder_combo.configure(state=combo_state)
         self.backend_combo.configure(state=combo_state)
         self._sync_encoder_ui()
@@ -716,6 +913,7 @@ class SDR2HDRGUI:
             if kind == "detail_status":
                 if self.state != AppState.CANCELLING:
                     self.status_var.set(str(payload))
+                    self.progress_var.set(str(payload))
                 self._log(str(payload))
             elif kind == "progress":
                 processed, total, fps = payload

@@ -71,13 +71,49 @@ class GuiTests(unittest.TestCase):
         app._selected_encoder = lambda: "libx265"
         app._selected_x265_mode = lambda: "balanced"
         app._selected_backend = lambda: "auto"
+        app._selected_upscale_engine = lambda: "ffmpeg"
+        app._selected_output_scale = lambda: 2.0
+        app._selected_target_resolution = lambda: (None, None)
+        app._selected_scaler = lambda: "lanczos"
+        app._selected_rtx_video_quality = lambda: "high"
 
         request = SDR2HDRGUI._build_request(app)
 
         self.assertEqual(request.hdr_style, "natural")
         self.assertEqual(request.tone, "reference")
         self.assertEqual(request.input_eotf, "bt1886")
+        self.assertEqual(request.output_scale, 2.0)
+        self.assertIsNone(request.target_width)
+        self.assertIsNone(request.target_height)
+        self.assertEqual(request.scaler, "lanczos")
         self.assertEqual(request.model_path, "models\\model.pt")
+
+    def test_build_request_includes_custom_target_resolution(self) -> None:
+        app = SDR2HDRGUI.__new__(SDR2HDRGUI)
+        app.input_var = SimpleNamespace(get=lambda: "in.mp4")
+        app.output_var = SimpleNamespace(get=lambda: "out.mp4")
+        app.preset_var = SimpleNamespace(get=lambda: "portrait")
+        app.hdr_style_var = SimpleNamespace(get=lambda: "natural")
+        app.tone_var = SimpleNamespace(get=lambda: "vivid")
+        app.input_eotf_var = SimpleNamespace(get=lambda: "bt1886")
+        app.model_path_var = SimpleNamespace(get=lambda: "models\\model.pt")
+        app.ai_strength_var = SimpleNamespace(get=lambda: 0.25)
+        app._selected_encoder = lambda: "libx265"
+        app._selected_x265_mode = lambda: "balanced"
+        app._selected_backend = lambda: "auto"
+        app._selected_upscale_engine = lambda: "rtx-video"
+        app._selected_output_scale = lambda: 1.0
+        app._selected_target_resolution = lambda: (3840, 2160)
+        app._selected_scaler = lambda: "lanczos"
+        app._selected_rtx_video_quality = lambda: "ultra"
+
+        request = SDR2HDRGUI._build_request(app)
+
+        self.assertEqual(request.output_scale, 1.0)
+        self.assertEqual(request.upscale_engine, "rtx-video")
+        self.assertEqual(request.target_width, 3840)
+        self.assertEqual(request.target_height, 2160)
+        self.assertEqual(request.rtx_video_quality, "ultra")
 
 
 if __name__ == "__main__":

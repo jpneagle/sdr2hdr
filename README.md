@@ -18,6 +18,7 @@ SDR 動画を HDR10 向けに変換する Python ツールです。GUI と CLI �
 - Python
 - `ffmpeg` と `ffprobe` が実行可能であること(`ffmpeg` 5.1 以上)
 - PyTorch を含む依存関係
+- RTX Video SDK 超解像を使う場合は、RTX GPU と `nvidia-vfx`(`pip install -e ".[rtx]"`)
 
 OS ごとの backend は次の通りです。
 
@@ -57,6 +58,9 @@ GUI の基本動作:
 - `Input` と `Output` を指定
 - `Preset` は既定で `portrait`
 - `Tone` は既定で `vivid`、`Input EOTF` は既定で `bt1886`
+- `Output Size` は既定で `Source`。高解像度出力が必要な場合は `2x`、`4x`、または `Custom`
+- `Custom` では `Target Size` に `3840 x 2160` のような偶数解像度を指定
+- `Upscale Engine` は既定で `FFmpeg Scaler`。RTX Video SDK を使う場合は `RTX Video SDK` を選択し、`RTX Quality` で品質レベルを指定
 - `AI Model` で `models/` 内の `.pt` を選択
 - `AI Strength` は既定で `0.25`
 - `Add To Queue` または `Add Files` で queue へ追加
@@ -97,6 +101,17 @@ The sample video compares:
   - 既定値は `vivid`(SDR の白を peak nits に配置する、効果の分かりやすい絵)。`reference` は BT.2408 準拠で白を 203 nits に固定する控えめな絵
 - `Input EOTF`
   - 既定値は `bt1886`(放送/BT.709 系動画向け)。PC 由来のソースは `srgb`
+- `Upscale Engine`
+  - `FFmpeg Scaler`(既定) または `RTX Video SDK`
+  - `RTX Video SDK` はフレームごとに NGX の超解像セッションを 1 回だけロードして使い回し、SDR→HDR 処理の直前で各フレームを超解像
+- `Output Size`
+  - `Source`(既定)、`2x`、`4x`、`Custom` から出力解像度を選択
+- `Target Size`
+  - `Output Size` が `Custom` の場合に使用する明示的な偶数解像度
+- `Scaler`
+  - 既定値は `Lanczos`。`FFmpeg Scaler` 使用時の ffmpeg スケーラを選択
+- `RTX Quality`
+  - `RTX Video SDK` 使用時の超解像品質(`Low`/`Medium`/`High`(既定)/`Ultra`)
 - `Encoder`
   - 環境に応じて `libx265`、`NVENC`、`VideoToolbox` を選択
 - `Speed/Quality`
@@ -173,6 +188,11 @@ Queue の status 表示は現在次の 7 種類です。
 - `--ai-strength` の既定値は `0.25`
 - `--tone` は `vivid`(既定。SDR の白を peak nits に配置)または `reference`(BT.2408 準拠で白を 203 nits に固定し、それ以上をハイライト用に確保)
 - `--input-eotf` は `srgb`(既定)または `bt1886`(放送/BT.709 系の動画ソース向け)
+- `--upscale-engine` は `ffmpeg`(既定)または `rtx-video`
+- `--output-scale` は HDR 変換後の出力解像度倍率(既定 `1.0`)。例: `2.0` で 1080p 入力を 4K 出力
+- `--target-resolution` は `3840x2160` のような明示的な偶数解像度。`--output-scale` とは併用不可
+- `--scaler` は `lanczos`(既定), `bicubic`, `bilinear`
+- `--rtx-video-quality` は RTX Video SDK 使用時の超解像品質。`low`, `medium`, `high`(既定), `ultra`
 
 例:
 
@@ -183,8 +203,22 @@ python -m sdr2hdr.cli input.mp4 output_hdr.mp4 `
   --encoder libx265 `
   --x265-mode balanced `
   --model-path models\enhancement_model_reuse_v1.pt `
-  --ai-strength 0.25
+  --ai-strength 0.25 `
+  --output-scale 2.0 `
+  --scaler lanczos
 ```
+
+RTX Video SDK 超解像を使う例:
+
+```powershell
+python -m sdr2hdr.cli input.mp4 output_hdr_4k.mp4 `
+  --model-path models\enhancement_model_reuse_v1.pt `
+  --upscale-engine rtx-video `
+  --output-scale 2.0 `
+  --rtx-video-quality high
+```
+
+RTX Video SDK の超解像は `nvidia-vfx`(`pip install -e ".[rtx]"`)経由で NVIDIA NGX を利用します。ジョブ全体で 1 つの超解像セッションをロードして使い回すため、フレームごとや外部プロセスごとに NGX を再初期化することはありません。
 
 ### Models
 
@@ -230,6 +264,7 @@ The current workflow assumes `AI model usage`. You must provide a trained TorchS
 - Python
 - `ffmpeg` and `ffprobe` available in `PATH` (`ffmpeg` 5.1 or newer)
 - Project dependencies including PyTorch
+- An RTX GPU and `nvidia-vfx` (`pip install -e ".[rtx]"`) when RTX Video SDK super resolution is used
 
 Backend options by OS:
 
@@ -269,6 +304,9 @@ Basic GUI workflow:
 - Set `Input` and `Output`
 - `Preset` defaults to `portrait`
 - `Tone` defaults to `vivid` and `Input EOTF` defaults to `bt1886`
+- `Output Size` defaults to `Source`; choose `2x`, `4x`, or `Custom` for higher-resolution output
+- `Custom` uses `Target Size`, such as `3840 x 2160`, and requires even dimensions
+- `Upscale Engine` defaults to `FFmpeg Scaler`; choose `RTX Video SDK` and set `RTX Quality` to use RTX Video SDK super resolution
 - Select a `.pt` model from `AI Model`
 - `AI Strength` defaults to `0.25`
 - Add jobs with `Add To Queue` or `Add Files`
@@ -309,6 +347,17 @@ YouTube 比較サンプル:
   - Default: `vivid` (SDR white mapped to peak nits for a clearly visible HDR effect). `reference` follows BT.2408 with SDR white anchored at 203 nits for a subtler picture
 - `Input EOTF`
   - Default: `bt1886` (for broadcast/BT.709 video). Use `srgb` for PC-origin sources
+- `Upscale Engine`
+  - `FFmpeg Scaler` (default) or `RTX Video SDK`
+  - `RTX Video SDK` loads a single NGX super-resolution session once and reuses it for every frame, running just before the SDR-to-HDR pass
+- `Output Size`
+  - `Source` (default), `2x`, `4x`, or `Custom`
+- `Target Size`
+  - Exact even output resolution used when `Output Size` is `Custom`
+- `Scaler`
+  - Default: `Lanczos`; selects the ffmpeg scaler used with `FFmpeg Scaler`
+- `RTX Quality`
+  - Super-resolution quality when `RTX Video SDK` is used (`Low`/`Medium`/`High` (default)/`Ultra`)
 - `Encoder`
   - `libx265`, `NVENC`, or `VideoToolbox` depending on platform
 - `Speed/Quality`
@@ -385,6 +434,11 @@ Current CLI behavior:
 - `--ai-strength` defaults to `0.25`
 - `--tone` is `vivid` (default, maps SDR white to peak nits) or `reference` (BT.2408: anchors SDR white at 203 nits, reserving the range above for highlights)
 - `--input-eotf` is `srgb` (default) or `bt1886` (for broadcast/BT.709 video sources)
+- `--upscale-engine` is `ffmpeg` (default) or `rtx-video`
+- `--output-scale` scales the HDR output resolution after conversion (default `1.0`), for example `2.0` turns 1080p into 4K output
+- `--target-resolution` sets an exact even output size such as `3840x2160`; do not combine it with `--output-scale` other than `1.0`
+- `--scaler` is `lanczos` (default), `bicubic`, or `bilinear`
+- `--rtx-video-quality` is the RTX Video SDK super-resolution quality: `low`, `medium`, `high` (default), or `ultra`
 
 Example:
 
@@ -395,8 +449,22 @@ python -m sdr2hdr.cli input.mp4 output_hdr.mp4 `
   --encoder libx265 `
   --x265-mode balanced `
   --model-path models\enhancement_model_reuse_v1.pt `
-  --ai-strength 0.25
+  --ai-strength 0.25 `
+  --output-scale 2.0 `
+  --scaler lanczos
 ```
+
+Example using RTX Video SDK super resolution:
+
+```powershell
+python -m sdr2hdr.cli input.mp4 output_hdr_4k.mp4 `
+  --model-path models\enhancement_model_reuse_v1.pt `
+  --upscale-engine rtx-video `
+  --output-scale 2.0 `
+  --rtx-video-quality high
+```
+
+RTX Video SDK super resolution runs through `nvidia-vfx` (`pip install -e ".[rtx]"`), which wraps NVIDIA NGX. A single super-resolution session is loaded once and reused for the whole job, so NGX is never re-initialized per frame or per external process.
 
 ### Models
 

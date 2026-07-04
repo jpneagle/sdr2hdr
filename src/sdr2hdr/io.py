@@ -121,6 +121,32 @@ def build_audio_output_args(output_path: str, source_path: str) -> list[str]:
     return ["-c:a", "copy"]
 
 
+def build_hdr_scale_filter(
+    source_width: int,
+    source_height: int,
+    output_width: int | None = None,
+    output_height: int | None = None,
+    scaler: str = "lanczos",
+    include_color_matrix: bool = True,
+) -> str | None:
+    if output_width is None or output_height is None:
+        if not include_color_matrix:
+            return None
+        return "scale=in_color_matrix=bt2020:out_color_matrix=bt2020"
+    if output_width == source_width and output_height == source_height:
+        if not include_color_matrix:
+            return None
+        return "scale=in_color_matrix=bt2020:out_color_matrix=bt2020"
+    options = [
+        str(output_width),
+        str(output_height),
+        f"flags={scaler}",
+    ]
+    if include_color_matrix:
+        options += ["in_color_matrix=bt2020", "out_color_matrix=bt2020"]
+    return "scale=" + ":".join(options)
+
+
 def open_encoder(
     output_path: str,
     source_path: str,
@@ -130,6 +156,9 @@ def open_encoder(
     x265_preset: str = "medium",
     x265_crf: int = 16,
     max_cll_override: tuple[int, int] | None = None,
+    output_width: int | None = None,
+    output_height: int | None = None,
+    scaler: str = "lanczos",
 ) -> subprocess.Popen[bytes]:
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     mastering = "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
@@ -160,12 +189,26 @@ def open_encoder(
         "1:a?",
     ]
     audio_args = build_audio_output_args(output_path, source_path)
+    hardware_filter = build_hdr_scale_filter(
+        info.width,
+        info.height,
+        output_width,
+        output_height,
+        scaler=scaler,
+        include_color_matrix=True,
+    )
+    software_filter = build_hdr_scale_filter(
+        info.width,
+        info.height,
+        output_width,
+        output_height,
+        scaler=scaler,
+        include_color_matrix=True,
+    )
     if encoder == "hevc_videotoolbox":
         cmd += [
             "-pix_fmt",
             "p010le",
-            "-vf",
-            "scale=in_color_matrix=bt2020:out_color_matrix=bt2020",
             "-c:v",
             "hevc_videotoolbox",
             "-profile:v",
@@ -185,13 +228,13 @@ def open_encoder(
             "-colorspace",
             "bt2020nc",
         ]
+        if hardware_filter is not None:
+            cmd += ["-vf", hardware_filter]
         cmd += audio_args + [output_path]
     elif encoder == "hevc_nvenc":
         cmd += [
             "-pix_fmt",
             "p010le",
-            "-vf",
-            "scale=in_color_matrix=bt2020:out_color_matrix=bt2020",
             "-c:v",
             "hevc_nvenc",
             "-profile:v",
@@ -217,8 +260,17 @@ def open_encoder(
             "-colorspace",
             "bt2020nc",
         ]
+        if hardware_filter is not None:
+            cmd += ["-vf", hardware_filter]
         cmd += audio_args + [output_path]
     else:
+        if (
+            software_filter is not None
+            and output_width is not None
+            and output_height is not None
+            and (output_width, output_height) != (info.width, info.height)
+        ):
+            cmd += ["-vf", software_filter]
         cmd += [
             "-c:v",
             "libx265",

@@ -14,6 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ai = ["torch>=2.2"]
+rtx = ["nvidia-vfx"]
 dev = ["pytest>=8.2"]
 train = [
   "torch>=2.2",

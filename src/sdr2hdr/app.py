@@ -21,6 +21,7 @@ from sdr2hdr.io import (
     restamp_hdr_metadata,
     start_stderr_drain,
 )
+from sdr2hdr.rtx_video import RTX_VIDEO_QUALITY_OPTIONS, RtxVideoUpscaler, ensure_rtx_video_available
 
 PRESETS = {
     "poc": ProcessorConfig(
@@ -95,6 +96,8 @@ TONE_DIFFUSE_WHITE = {
 }
 
 INPUT_EOTF_OPTIONS = ("srgb", "bt1886")
+SCALER_OPTIONS = ("lanczos", "bicubic", "bilinear")
+UPSCALE_ENGINE_OPTIONS = ("ffmpeg", "rtx-video")
 
 
 @dataclass
@@ -116,6 +119,13 @@ class ConversionRequest:
     hdr_style: str = "natural"
     tone: str = "vivid"
     input_eotf: str = "srgb"
+    upscale_engine: str = "ffmpeg"
+    output_scale: float = 1.0
+    target_width: int | None = None
+    target_height: int | None = None
+    scaler: str = "lanczos"
+    rtx_video_quality: str = "high"
+    audio_source_path: str | None = None
     model_path: str | None = None
     device: str = "cpu"
     max_frames: int | None = None
@@ -187,6 +197,25 @@ def build_request_config(request: ConversionRequest) -> tuple[ProcessorConfig, s
     return config, x265_preset, x265_crf
 
 
+def _even_dimension(value: int) -> int:
+    return max(2, value if value % 2 == 0 else value - 1)
+
+
+def resolve_output_dimensions(info: object, request: ConversionRequest) -> tuple[int, int]:
+    width = int(getattr(info, "width"))
+    height = int(getattr(info, "height"))
+    if request.target_width is not None or request.target_height is not None:
+        if request.target_width is None or request.target_height is None:
+            raise ValueError("Both target width and target height are required.")
+        return request.target_width, request.target_height
+    if abs(request.output_scale - 1.0) < 1e-6:
+        return width, height
+    return (
+        _even_dimension(int(round(width * request.output_scale))),
+        _even_dimension(int(round(height * request.output_scale))),
+    )
+
+
 def validate_request(request: ConversionRequest) -> None:
     input_path = Path(request.input_path)
     output_path = Path(request.output_path)
@@ -210,6 +239,27 @@ def validate_request(request: ConversionRequest) -> None:
         raise ValueError(f"Unknown tone mode: {request.tone}")
     if request.input_eotf not in INPUT_EOTF_OPTIONS:
         raise ValueError(f"Unknown input EOTF: {request.input_eotf}")
+    if request.upscale_engine not in UPSCALE_ENGINE_OPTIONS:
+        raise ValueError(f"Unknown upscale engine: {request.upscale_engine}")
+    if request.scaler not in SCALER_OPTIONS:
+        raise ValueError(f"Unknown scaler: {request.scaler}")
+    if request.output_scale <= 0.0:
+        raise ValueError("Output scale must be greater than 0.")
+    if request.output_scale > 4.0:
+        raise ValueError("Output scale must be 4.0 or lower.")
+    if (request.target_width is None) != (request.target_height is None):
+        raise ValueError("Both target width and target height are required.")
+    if request.target_width is not None and request.target_height is not None:
+        if abs(request.output_scale - 1.0) >= 1e-6:
+            raise ValueError("Use either output scale or target resolution, not both.")
+        if request.target_width < 2 or request.target_height < 2:
+            raise ValueError("Target resolution must be at least 2x2.")
+        if request.target_width % 2 or request.target_height % 2:
+            raise ValueError("Target width and height must be even for 4:2:0 HEVC output.")
+    if request.upscale_engine == "rtx-video":
+        if request.rtx_video_quality not in RTX_VIDEO_QUALITY_OPTIONS:
+            raise ValueError(f"Unknown RTX Video quality: {request.rtx_video_quality}")
+        ensure_rtx_video_available()
     if request.x265_mode not in X265_PROFILE_DEFAULTS:
         raise ValueError(f"Unknown x265 mode: {request.x265_mode}")
     if request.model_path and not model_path.exists():
@@ -351,20 +401,46 @@ def _run_conversion_once(
     config, x265_preset, x265_crf = build_request_config(request)
     info = ffprobe_video(request.input_path)
     total_frames = request.max_frames if request.max_frames is not None else info.frames
+    output_width, output_height = resolve_output_dimensions(info, request)
+    use_rtx_video = request.upscale_engine == "rtx-video" and (output_width, output_height) != (
+        info.width,
+        info.height,
+    )
     processor = SDRToHDRProcessor(config, enhancer=HeuristicEnhancer())
     _emit_status(callbacks, "Loading AI model")
     processor.enhancer = build_enhancer(request, processor.torch_device)
+    rtx_upscaler: RtxVideoUpscaler | None = None
+    if use_rtx_video:
+        _emit_status(callbacks, "Loading RTX Video SDK")
+        rtx_upscaler = RtxVideoUpscaler(output_width, output_height, quality=request.rtx_video_quality)
     decoder = open_decoder(request.input_path, info)
     start_stderr_drain(decoder)
-    encoder = open_encoder(
-        request.output_path,
-        request.input_path,
-        info,
-        config.peak_nits,
-        encoder=request.encoder,
-        x265_preset=x265_preset,
-        x265_crf=x265_crf,
-    )
+    if use_rtx_video:
+        # Frames are already upscaled to (output_width, output_height) by rtx_upscaler
+        # before reaching the encoder, so the encoder reads raw frames at that size
+        # directly instead of being asked to scale them itself.
+        encoder = open_encoder(
+            request.output_path,
+            request.audio_source_path or request.input_path,
+            replace(info, width=output_width, height=output_height),
+            config.peak_nits,
+            encoder=request.encoder,
+            x265_preset=x265_preset,
+            x265_crf=x265_crf,
+        )
+    else:
+        encoder = open_encoder(
+            request.output_path,
+            request.audio_source_path or request.input_path,
+            info,
+            config.peak_nits,
+            encoder=request.encoder,
+            x265_preset=x265_preset,
+            x265_crf=x265_crf,
+            output_width=output_width,
+            output_height=output_height,
+            scaler=request.scaler,
+        )
     start_stderr_drain(encoder)
     processed = 0
     cancelled = False
@@ -452,7 +528,14 @@ def _run_conversion_once(
                 continue
             if item is _SENTINEL:
                 break
-            hdr_frame = processor.process_frame(item)
+            if rtx_upscaler is not None and processor.torch_device is not None and str(processor.torch_device).startswith("cuda"):
+                # GPU-resident handoff: keep the SR output on-device instead of
+                # downloading to numpy and re-uploading inside process_frame.
+                hdr_frame = processor.process_frame_tensor(rtx_upscaler.upscale_tensor(item))
+            else:
+                if rtx_upscaler is not None:
+                    item = rtx_upscaler.upscale(item)
+                hdr_frame = processor.process_frame(item)
             if not _put_until(
                 encode_q,
                 hdr_frame,
@@ -476,6 +559,8 @@ def _run_conversion_once(
         raise
     finally:
         stop_event.set()
+        if rtx_upscaler is not None:
+            rtx_upscaler.close()
         if cancelled:
             _terminate_process(decoder)
             _wait_terminated_process(decoder)

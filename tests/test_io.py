@@ -1,7 +1,14 @@
 import unittest
 from unittest import mock
 
-from sdr2hdr.io import VideoInfo, build_audio_output_args, is_interlaced_video, open_decoder
+from sdr2hdr.io import (
+    VideoInfo,
+    build_audio_output_args,
+    build_hdr_scale_filter,
+    is_interlaced_video,
+    open_decoder,
+    open_encoder,
+)
 
 
 class IoTests(unittest.TestCase):
@@ -39,6 +46,50 @@ class IoTests(unittest.TestCase):
     @mock.patch("sdr2hdr.io.ffprobe_first_audio_codec", return_value=None)
     def test_build_audio_output_args_handles_missing_audio(self, _: mock.Mock) -> None:
         self.assertEqual(build_audio_output_args("output.mp4", "input.mp4"), [])
+
+    def test_build_hdr_scale_filter_resizes_with_color_matrix(self) -> None:
+        self.assertEqual(
+            build_hdr_scale_filter(1920, 1080, 3840, 2160, scaler="lanczos"),
+            "scale=3840:2160:flags=lanczos:in_color_matrix=bt2020:out_color_matrix=bt2020",
+        )
+
+    @mock.patch("sdr2hdr.io.ffprobe_first_audio_codec", return_value=None)
+    @mock.patch("sdr2hdr.io.subprocess.Popen")
+    def test_open_encoder_adds_resize_filter_for_nvenc(
+        self,
+        popen_mock: mock.Mock,
+        _: mock.Mock,
+    ) -> None:
+        info = VideoInfo(1920, 1080, 23.976, None, "yuv420p", 10.0, "progressive")
+        open_encoder(
+            "output.mp4",
+            "input.mp4",
+            info,
+            peak_nits=1000.0,
+            encoder="hevc_nvenc",
+            output_width=3840,
+            output_height=2160,
+            scaler="lanczos",
+        )
+        cmd = popen_mock.call_args.args[0]
+        self.assertEqual(cmd[cmd.index("-s") + 1], "1920x1080")
+        self.assertIn("-vf", cmd)
+        self.assertEqual(
+            cmd[cmd.index("-vf") + 1],
+            "scale=3840:2160:flags=lanczos:in_color_matrix=bt2020:out_color_matrix=bt2020",
+        )
+
+    @mock.patch("sdr2hdr.io.ffprobe_first_audio_codec", return_value=None)
+    @mock.patch("sdr2hdr.io.subprocess.Popen")
+    def test_open_encoder_keeps_libx265_unfiltered_without_resize(
+        self,
+        popen_mock: mock.Mock,
+        _: mock.Mock,
+    ) -> None:
+        info = VideoInfo(1920, 1080, 23.976, None, "yuv420p", 10.0, "progressive")
+        open_encoder("output.mp4", "input.mp4", info, peak_nits=1000.0, encoder="libx265")
+        cmd = popen_mock.call_args.args[0]
+        self.assertNotIn("-vf", cmd)
 
 
 if __name__ == "__main__":
