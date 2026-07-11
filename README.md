@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> Due to the weakening Japanese yen, it has become increasingly difficult to afford not only the equipment needed to continue development, but even basic daily necessities. If you find this project useful, please consider supporting its development. Your help would mean a great deal.
+>
+> [Support this project on Buy Me a Coffee](https://buymeacoffee.com/eaglejp2b)
+
 # sdr2hdr
 
 ## 日本語
