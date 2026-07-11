@@ -47,6 +47,12 @@ python -m venv .venv
 pip install -e ".[ai]"
 ```
 
+RTX Video SDK 超解像も使う場合は、代わりに `rtx` 依存関係をまとめてインストールします。このコマンドで `nvidia-vfx` も導入されます。
+
+```powershell
+pip install -e ".[ai,rtx]"
+```
+
 モデル配置例:
 
 ```text
@@ -291,6 +297,12 @@ Create a virtual environment, install the package, and place a trained model in 
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -e ".[ai]"
+```
+
+To also use RTX Video SDK super resolution, install the `rtx` dependencies at the same time instead. This command also installs `nvidia-vfx`.
+
+```powershell
+pip install -e ".[ai,rtx]"
 ```
 
 Example model layout:
