@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--preset", choices=sorted(PRESETS), default="portrait")
     parser.add_argument("--encoder", default="libx265")
     parser.add_argument("--x265-mode", choices=sorted(X265_PROFILE_DEFAULTS), default="balanced")
-    parser.add_argument("--backend", choices=["auto", "numpy", "cuda", "mps"], default="auto")
+    parser.add_argument("--backend", choices=["auto", "numpy", "cuda", "xpu", "mps"], default="auto")
     parser.add_argument("--hdr-style", choices=sorted(HDR_STYLE_DEFAULTS), default="natural")
     parser.add_argument(
         "--tone",

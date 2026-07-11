@@ -215,6 +215,19 @@ def _torch_compile_available() -> bool:
         return False
 
 
+def _xpu_is_available() -> bool:
+    if torch is None:
+        return False
+    xpu = getattr(torch, "xpu", None)
+    is_available = getattr(xpu, "is_available", None)
+    if not callable(is_available):
+        return False
+    try:
+        return bool(is_available())
+    except Exception:
+        return False
+
+
 class SDRToHDRProcessor:
     _PINNED_POOL_SIZE = 6
 
@@ -251,7 +264,7 @@ class SDRToHDRProcessor:
                 device=self.torch_device,
                 dtype=torch.float32,
             )
-            if self._is_cuda and _torch_compile_available():
+            if (self._is_cuda or self._is_xpu) and _torch_compile_available():
                 self._try_compile()
 
     def _try_compile(self) -> None:
@@ -296,23 +309,31 @@ class SDRToHDRProcessor:
             return "cpu"
         if self.config.backend == "cuda":
             return "cuda" if torch.cuda.is_available() else None
+        if self.config.backend == "xpu":
+            return "xpu" if _xpu_is_available() else None
         if self.config.backend == "mps":
             return "mps" if torch.backends.mps.is_available() else None
         if platform.system() == "Windows":
             if torch.cuda.is_available():
                 return "cuda"
-            if torch.backends.mps.is_available():
-                return "mps"
+            if _xpu_is_available():
+                return "xpu"
             return None
         if platform.system() == "Darwin" and torch.backends.mps.is_available():
             return "mps"
         if torch.cuda.is_available():
             return "cuda"
+        if _xpu_is_available():
+            return "xpu"
         return None
 
     @property
     def _is_cuda(self) -> bool:
         return self.torch_device is not None and str(self.torch_device).startswith("cuda")
+
+    @property
+    def _is_xpu(self) -> bool:
+        return self.torch_device is not None and str(self.torch_device).startswith("xpu")
 
     @property
     def _is_mps(self) -> bool:
@@ -701,7 +722,7 @@ class SDRToHDRProcessor:
             skin_mask = torch.from_numpy(estimate_skin_mask(frame_linear_np)).to(self.torch_device, dtype=torch.float32)
 
         # --- Phase 3: fp16 mask computation ---
-        _mask_dtype = torch.float16 if (self._is_cuda or self._is_mps) else torch.float32
+        _mask_dtype = torch.float16 if (self._is_cuda or self._is_xpu or self._is_mps) else torch.float32
         frame_linear_h = frame_linear_t.to(_mask_dtype) if _mask_dtype != torch.float32 else frame_linear_t
 
         luma_t = torch.clamp(self._torch_compute_luma(frame_linear_t), 0.0, 2.0)

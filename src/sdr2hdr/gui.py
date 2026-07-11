@@ -103,6 +103,8 @@ def describe_mode_hint(
         return "Fastest on supported Macs. Falls back to libx265 if VideoToolbox fails." + upscale_hint
     if encoder == "hevc_nvenc":
         return "Fastest on supported NVIDIA GPUs. Falls back to libx265 if NVENC fails." + upscale_hint
+    if encoder == "hevc_qsv":
+        return "Fast on supported Intel GPUs. Falls back to libx265 if QSV fails." + upscale_hint
     if mode == "preview":
         speed = "Fastest x265 mode, lower compression efficiency."
     elif mode == "final":
@@ -112,6 +114,8 @@ def describe_mode_hint(
     if model_path.strip():
         if backend == "cuda":
             return speed + " Learned-map mode enabled on NVIDIA GPU." + upscale_hint
+        if backend == "xpu":
+            return speed + " Learned-map mode enabled on Intel GPU." + upscale_hint
         if backend == "mps":
             return speed + " Learned-map mode enabled on Apple GPU." + upscale_hint
         return speed + " Learned-map mode enabled." + upscale_hint
@@ -119,6 +123,8 @@ def describe_mode_hint(
         return speed + " Uses Apple GPU." + upscale_hint
     if backend == "cuda":
         return speed + " Uses NVIDIA GPU for processing." + upscale_hint
+    if backend == "xpu":
+        return speed + " Uses Intel GPU for processing." + upscale_hint
     return speed + upscale_hint
 
 
@@ -132,6 +138,7 @@ def build_encoder_options(system_name: str | None = None) -> dict[str, str]:
         options["hevc_videotoolbox"] = "VideoToolbox (Fast on Mac)"
     elif system_name == "Windows":
         options["hevc_nvenc"] = "NVENC (Fast on NVIDIA)"
+        options["hevc_qsv"] = "QSV (Fast on Intel)"
     return options
 
 
@@ -142,6 +149,8 @@ def build_backend_options(system_name: str | None = None) -> dict[str, str]:
         options["mps"] = "MPS (Apple GPU)"
     if system_name == "Windows":
         options["cuda"] = "CUDA (NVIDIA GPU)"
+    if system_name in {"Windows", "Linux"}:
+        options["xpu"] = "XPU (Intel GPU)"
     options["numpy"] = "CPU / NumPy"
     return options
 

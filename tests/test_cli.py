@@ -43,6 +43,8 @@ class CLIParserTests(unittest.TestCase):
 
     def test_backend_choices(self) -> None:
         parser = build_parser()
+        args = parser.parse_args(["input.mp4", "--model-path", "m.pt", "--backend", "xpu"])
+        self.assertEqual(args.backend, "xpu")
         with self.assertRaises(SystemExit):
             parser.parse_args(["input.mp4", "--model-path", "m.pt", "--backend", "invalid"])
 

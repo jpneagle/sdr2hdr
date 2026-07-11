@@ -42,6 +42,7 @@ class AppTests(unittest.TestCase):
         self.assertTrue(is_hardware_encoder_failure("hevc_videotoolbox failed"))
         self.assertTrue(is_hardware_encoder_failure("OpenEncodeSessionEx failed: unsupported device"))
         self.assertTrue(is_hardware_encoder_failure("Cannot load nvcuda.dll"))
+        self.assertTrue(is_hardware_encoder_failure("Error initializing an MFX session for QSV"))
         self.assertFalse(is_hardware_encoder_failure("generic libx265 failure"))
 
     def test_default_encoder_for_platform(self) -> None:

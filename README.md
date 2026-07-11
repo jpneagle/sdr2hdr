@@ -24,14 +24,18 @@ SDR 動画を HDR10 向けに変換する Python ツールです。GUI と CLI �
 - `ffmpeg` と `ffprobe` が実行可能であること(`ffmpeg` 5.1 以上)
 - PyTorch を含む依存関係
 - RTX Video SDK 超解像を使う場合は、RTX GPU と `nvidia-vfx`(`pip install -e ".[rtx]"`)
+- Intel QSV エンコードを使う場合は、対応Intel GPU、ドライバー、および `hevc_qsv` 対応FFmpeg
 
 OS ごとの backend は次の通りです。
 
-- Windows: `Auto`, `CUDA`, `CPU / NumPy`
+- Windows: `Auto`, `CUDA`, `XPU`, `CPU / NumPy`
 - macOS: `Auto`, `MPS`, `CPU / NumPy`
+- Linux: `Auto`, `XPU`, `CPU / NumPy`
 - その他: `Auto`, `CPU / NumPy`
 
-`Auto` は使える環境で GPU backend を優先し、使えない場合は CPU 側へ寄せます。
+`Auto` は使える環境で GPU backend を優先し、使えない場合は CPU 側へ寄せます。Intel GPU の XPU backend には XPU 対応の PyTorch ビルドが必要です。
+
+Windows のGUIでは `QSV (Fast on Intel)` を選ぶとIntel Quick Sync VideoでHEVC Main10をエンコードします。QSVの初期化に失敗した場合は `libx265` へフォールバックします。
 
 ### Setup
 

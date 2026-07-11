@@ -18,6 +18,7 @@ class GuiTests(unittest.TestCase):
         options = build_encoder_options("Windows")
         self.assertIn("libx265", options)
         self.assertIn("hevc_nvenc", options)
+        self.assertIn("hevc_qsv", options)
         self.assertNotIn("hevc_videotoolbox", options)
 
     def test_build_encoder_options_for_macos(self) -> None:
@@ -25,11 +26,13 @@ class GuiTests(unittest.TestCase):
         self.assertIn("libx265", options)
         self.assertIn("hevc_videotoolbox", options)
         self.assertNotIn("hevc_nvenc", options)
+        self.assertNotIn("hevc_qsv", options)
 
     def test_build_backend_options_for_windows(self) -> None:
         options = build_backend_options("Windows")
         self.assertIn("auto", options)
         self.assertIn("cuda", options)
+        self.assertIn("xpu", options)
         self.assertIn("numpy", options)
         self.assertNotIn("directml", options)
 
@@ -37,6 +40,14 @@ class GuiTests(unittest.TestCase):
         options = build_backend_options("Darwin")
         self.assertIn("auto", options)
         self.assertIn("mps", options)
+        self.assertIn("numpy", options)
+        self.assertNotIn("cuda", options)
+        self.assertNotIn("xpu", options)
+
+    def test_build_backend_options_for_linux(self) -> None:
+        options = build_backend_options("Linux")
+        self.assertIn("auto", options)
+        self.assertIn("xpu", options)
         self.assertIn("numpy", options)
         self.assertNotIn("cuda", options)
 

@@ -81,6 +81,25 @@ class IoTests(unittest.TestCase):
 
     @mock.patch("sdr2hdr.io.ffprobe_first_audio_codec", return_value=None)
     @mock.patch("sdr2hdr.io.subprocess.Popen")
+    def test_open_encoder_builds_main10_qsv_command(
+        self,
+        popen_mock: mock.Mock,
+        _: mock.Mock,
+    ) -> None:
+        info = VideoInfo(1920, 1080, 23.976, None, "yuv420p", 10.0, "progressive")
+        open_encoder("output.mp4", "input.mp4", info, peak_nits=1000.0, encoder="hevc_qsv")
+        cmd = popen_mock.call_args.args[0]
+        codec_index = cmd.index("-c:v")
+        self.assertEqual(cmd[codec_index + 1], "hevc_qsv")
+        self.assertEqual(cmd[codec_index - 2 : codec_index], ["-pix_fmt", "p010le"])
+        self.assertEqual(cmd[cmd.index("-profile:v") + 1], "main10")
+        self.assertEqual(cmd[cmd.index("-preset") + 1], "slow")
+        self.assertEqual(cmd[cmd.index("-global_quality") + 1], "18")
+        self.assertNotIn("-tune", cmd)
+        self.assertNotIn("-rc", cmd)
+
+    @mock.patch("sdr2hdr.io.ffprobe_first_audio_codec", return_value=None)
+    @mock.patch("sdr2hdr.io.subprocess.Popen")
     def test_open_encoder_keeps_libx265_unfiltered_without_resize(
         self,
         popen_mock: mock.Mock,

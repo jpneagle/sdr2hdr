@@ -264,7 +264,7 @@ def validate_request(request: ConversionRequest) -> None:
         raise ValueError(f"Unknown x265 mode: {request.x265_mode}")
     if request.model_path and not model_path.exists():
         raise ValueError(f"Model file does not exist: {request.model_path}")
-    if request.backend in {"cuda", "mps", "torch-cpu", "numpy"} and suffix != ".pt":
+    if request.backend in {"cuda", "xpu", "mps", "torch-cpu", "numpy"} and suffix != ".pt":
         raise ValueError(f"Backend '{request.backend}' requires a TorchScript model (.pt).")
 
 
@@ -318,6 +318,8 @@ def is_hardware_encoder_failure(message: str) -> bool:
         "videotoolbox" in lowered
         or "compression session" in lowered
         or "nvenc" in lowered
+        or "qsv" in lowered
+        or "mfx" in lowered
         or "nvidia" in lowered
         or "no capable devices found" in lowered
         or "cannot load nvcuda" in lowered
@@ -377,7 +379,7 @@ def run_conversion(
         except RuntimeError as exc:
             if (
                 current_request.fallback_to_x265_on_hardware_error
-                and current_request.encoder in {"hevc_videotoolbox", "hevc_nvenc"}
+                and current_request.encoder in {"hevc_videotoolbox", "hevc_nvenc", "hevc_qsv"}
                 and not attempted_fallback
                 and is_hardware_encoder_failure(str(exc))
             ):

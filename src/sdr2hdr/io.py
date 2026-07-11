@@ -263,6 +263,32 @@ def open_encoder(
         if hardware_filter is not None:
             cmd += ["-vf", hardware_filter]
         cmd += audio_args + [output_path]
+    elif encoder == "hevc_qsv":
+        cmd += [
+            "-pix_fmt",
+            "p010le",
+            "-c:v",
+            "hevc_qsv",
+            "-profile:v",
+            "main10",
+            "-preset",
+            "slow",
+            "-global_quality",
+            "18",
+            "-tag:v",
+            "hvc1",
+            "-bsf:v",
+            "hevc_metadata=colour_primaries=9:transfer_characteristics=16:matrix_coefficients=9",
+            "-color_primaries",
+            "bt2020",
+            "-color_trc",
+            "smpte2084",
+            "-colorspace",
+            "bt2020nc",
+        ]
+        if hardware_filter is not None:
+            cmd += ["-vf", hardware_filter]
+        cmd += audio_args + [output_path]
     else:
         if (
             software_filter is not None
