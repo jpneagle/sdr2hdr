@@ -5,6 +5,8 @@ from pathlib import Path
 
 from .app import (
     HDR_STYLE_DEFAULTS,
+    INTEL_SR_DEVICE_OPTIONS,
+    INTEL_SR_MODEL_OPTIONS,
     INPUT_EOTF_OPTIONS,
     PRESETS,
     RTX_VIDEO_QUALITY_OPTIONS,
@@ -60,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--upscale-engine",
         choices=UPSCALE_ENGINE_OPTIONS,
         default="ffmpeg",
-        help="High-resolution engine: ffmpeg uses final encode scaling; rtx-video runs an RTX Video SDK CLI before HDR.",
+        help="High-resolution engine: ffmpeg uses final encode scaling; rtx-video uses RTX Video SDK; intel-vino uses Intel OpenVINO super resolution.",
     )
     parser.add_argument(
         "--output-scale",
@@ -84,6 +86,18 @@ def build_parser() -> argparse.ArgumentParser:
         choices=RTX_VIDEO_QUALITY_OPTIONS,
         default="high",
         help="RTX Video SDK super resolution quality when --upscale-engine rtx-video is used.",
+    )
+    parser.add_argument(
+        "--intel-sr-model",
+        choices=INTEL_SR_MODEL_OPTIONS,
+        default="sr-1032",
+        help="Intel OpenVINO super resolution model: sr-1032 (4x) or sr-1033 (3x).",
+    )
+    parser.add_argument(
+        "--intel-sr-device",
+        choices=INTEL_SR_DEVICE_OPTIONS,
+        default="AUTO",
+        help="Intel OpenVINO inference device: AUTO, CPU, or GPU (Intel iGPU/Arc).",
     )
     parser.add_argument(
         "--no-fallback-to-x265-on-hardware-error",
@@ -126,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
         target_height=target_height,
         scaler=args.scaler,
         rtx_video_quality=args.rtx_video_quality,
+        intel_sr_model=args.intel_sr_model,
+        intel_sr_device=args.intel_sr_device,
         device=args.device,
         model_path=model_path,
         ai_strength=args.ai_strength,

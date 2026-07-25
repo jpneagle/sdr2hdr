@@ -48,6 +48,7 @@ SCALER_LABELS = {
 UPSCALE_ENGINE_LABELS = {
     "ffmpeg": "FFmpeg Scaler",
     "rtx-video": "RTX Video SDK",
+    "intel-vino": "Intel OpenVINO SR",
 }
 RTX_VIDEO_QUALITY_LABELS = {
     "low": "Low (Fast)",
@@ -89,12 +90,13 @@ def describe_mode_hint(
     target_height: int | None = None,
     upscale_engine: str = "ffmpeg",
 ) -> str:
-    engine_name = "RTX Video SDK" if upscale_engine == "rtx-video" else "FFmpeg"
+    engine_names = {"rtx-video": "RTX Video SDK", "intel-vino": "Intel OpenVINO SR"}
+    engine_name = engine_names.get(upscale_engine, "FFmpeg")
     if target_width is not None and target_height is not None:
         upscale_hint = f" {engine_name} output {target_width}x{target_height}."
     elif output_scale > 1.0001:
-        if upscale_engine == "rtx-video":
-            upscale_hint = f" RTX Video SDK SR {output_scale:g}x."
+        if upscale_engine in ("rtx-video", "intel-vino"):
+            upscale_hint = f" {engine_name} {output_scale:g}x."
         else:
             upscale_hint = f" Output scaled {output_scale:g}x with {scaler}."
     else:
@@ -209,7 +211,7 @@ CONTROL_TOOLTIPS = {
     "hdr_style": "Highlight/shadow character of the result:\nnatural (balanced), cinematic (stronger highlights), night (restrained shadows).",
     "tone": "Brightness anchoring.\nvivid: bright, punchy HDR look (default).\nreference: BT.2408 standard with SDR white at 203 nits - subtler, closer to broadcast grading.",
     "input_eotf": "How the SDR input is decoded. Pick by source, not by taste:\nbt1886 for TV/broadcast/camera video, srgb for PC or web content.",
-    "upscale_engine": "High-resolution engine.\nFFmpeg scales after HDR conversion. RTX Video SDK runs super resolution before HDR conversion.",
+    "upscale_engine": "High-resolution engine.\nFFmpeg scales after HDR conversion.\nRTX Video SDK or Intel OpenVINO SR run super resolution before HDR conversion.",
     "output_scale": "Output resolution scaling.\nSource keeps the original size. 2x turns 1080p into 4K. Custom uses Target Size.",
     "target_size": "Exact output resolution for Custom output size.\nUse even dimensions for HEVC, for example 3840 x 2160.",
     "scaler": "FFmpeg resize algorithm for high-resolution output.\nLanczos is sharpest, bilinear is fastest.",

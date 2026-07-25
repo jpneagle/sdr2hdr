@@ -21,6 +21,7 @@ from sdr2hdr.io import (
     restamp_hdr_metadata,
     start_stderr_drain,
 )
+from sdr2hdr.intel_video import INTEL_SR_DEVICE_OPTIONS, INTEL_SR_MODEL_OPTIONS, OpenVINOUpscaler, ensure_openvino_available
 from sdr2hdr.rtx_video import RTX_VIDEO_QUALITY_OPTIONS, RtxVideoUpscaler, ensure_rtx_video_available
 
 PRESETS = {
@@ -97,7 +98,7 @@ TONE_DIFFUSE_WHITE = {
 
 INPUT_EOTF_OPTIONS = ("srgb", "bt1886")
 SCALER_OPTIONS = ("lanczos", "bicubic", "bilinear")
-UPSCALE_ENGINE_OPTIONS = ("ffmpeg", "rtx-video")
+UPSCALE_ENGINE_OPTIONS = ("ffmpeg", "rtx-video", "intel-vino")
 
 
 @dataclass
@@ -125,6 +126,8 @@ class ConversionRequest:
     target_height: int | None = None
     scaler: str = "lanczos"
     rtx_video_quality: str = "high"
+    intel_sr_model: str = "sr-1032"
+    intel_sr_device: str = "AUTO"
     audio_source_path: str | None = None
     model_path: str | None = None
     device: str = "cpu"
@@ -260,6 +263,12 @@ def validate_request(request: ConversionRequest) -> None:
         if request.rtx_video_quality not in RTX_VIDEO_QUALITY_OPTIONS:
             raise ValueError(f"Unknown RTX Video quality: {request.rtx_video_quality}")
         ensure_rtx_video_available()
+    if request.upscale_engine == "intel-vino":
+        if request.intel_sr_model not in INTEL_SR_MODEL_OPTIONS:
+            raise ValueError(f"Unknown Intel SR model: {request.intel_sr_model}")
+        if request.intel_sr_device not in INTEL_SR_DEVICE_OPTIONS:
+            raise ValueError(f"Unknown Intel SR device: {request.intel_sr_device}")
+        ensure_openvino_available()
     if request.x265_mode not in X265_PROFILE_DEFAULTS:
         raise ValueError(f"Unknown x265 mode: {request.x265_mode}")
     if request.model_path and not model_path.exists():
@@ -408,6 +417,11 @@ def _run_conversion_once(
         info.width,
         info.height,
     )
+    use_intel_sr = request.upscale_engine == "intel-vino" and (output_width, output_height) != (
+        info.width,
+        info.height,
+    )
+    use_hw_upscaler = use_rtx_video or use_intel_sr
     processor = SDRToHDRProcessor(config, enhancer=HeuristicEnhancer())
     _emit_status(callbacks, "Loading AI model")
     processor.enhancer = build_enhancer(request, processor.torch_device)
@@ -415,12 +429,20 @@ def _run_conversion_once(
     if use_rtx_video:
         _emit_status(callbacks, "Loading RTX Video SDK")
         rtx_upscaler = RtxVideoUpscaler(output_width, output_height, quality=request.rtx_video_quality)
+    intel_upscaler: OpenVINOUpscaler | None = None
+    if use_intel_sr:
+        _emit_status(callbacks, "Loading Intel OpenVINO SR model")
+        intel_upscaler = OpenVINOUpscaler(
+            output_width, output_height,
+            model=request.intel_sr_model,
+            device=request.intel_sr_device,
+        )
     decoder = open_decoder(request.input_path, info)
     start_stderr_drain(decoder)
-    if use_rtx_video:
-        # Frames are already upscaled to (output_width, output_height) by rtx_upscaler
-        # before reaching the encoder, so the encoder reads raw frames at that size
-        # directly instead of being asked to scale them itself.
+    if use_hw_upscaler:
+        # Frames are already upscaled to (output_width, output_height) by the
+        # hardware upscaler before reaching the encoder, so the encoder reads
+        # raw frames at that size directly instead of scaling them itself.
         encoder = open_encoder(
             request.output_path,
             request.audio_source_path or request.input_path,
@@ -534,9 +556,15 @@ def _run_conversion_once(
                 # GPU-resident handoff: keep the SR output on-device instead of
                 # downloading to numpy and re-uploading inside process_frame.
                 hdr_frame = processor.process_frame_tensor(rtx_upscaler.upscale_tensor(item))
+            elif intel_upscaler is not None and processor.torch_device is not None:
+                # Intel SR returns a CPU tensor; the processor will move it to
+                # the appropriate device (XPU/CPU) inside process_frame_tensor.
+                hdr_frame = processor.process_frame_tensor(intel_upscaler.upscale_tensor(item))
             else:
                 if rtx_upscaler is not None:
                     item = rtx_upscaler.upscale(item)
+                elif intel_upscaler is not None:
+                    item = intel_upscaler.upscale(item)
                 hdr_frame = processor.process_frame(item)
             if not _put_until(
                 encode_q,
@@ -563,6 +591,8 @@ def _run_conversion_once(
         stop_event.set()
         if rtx_upscaler is not None:
             rtx_upscaler.close()
+        if intel_upscaler is not None:
+            intel_upscaler.close()
         if cancelled:
             _terminate_process(decoder)
             _wait_terminated_process(decoder)
